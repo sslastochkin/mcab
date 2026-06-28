@@ -1,16 +1,16 @@
-name: Publish to PyPI
+name: PyPI Publish
 
 on:
   push:
     tags:
-      - "v*.*.*"   # триггер на теги вида v0.1.0, v1.2.3 и т.д.
+      - "v*.*.*"
 
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
-    environment: pypi          # должно совпадать с именем в Trusted Publishing
+    environment: pypi
     permissions:
-      id-token: write          # обязательно для OIDC (без хранения секретов!)
+      id-token: write
       contents: read
 
     steps:
