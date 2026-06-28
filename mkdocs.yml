@@ -1,3 +1,7 @@
+site_name: MCAB Docs
+site_description: MCAB Tutorial & Documentation
+site_url: https://sslastochkin.github.io/mcab/
+
 nav:
   - Home: index.md
   - About: about.md
