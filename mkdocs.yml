@@ -3,10 +3,48 @@ site_description: MCAB Tutorial & Documentation
 site_url: https://sslastochkin.github.io/mcab/
 
 nav:
-  - Home: index.md
-  - About: about.md
+  - 'Главная': 'index.md'
+  - 'Начало работы':
+    - 'About': 'about.md'
 
+# Настройка темы
 theme:
-  name: material
+  name: material # Указываем, что используем Material
+  # Включаем крутые фичи темы
   features:
-    - navigation.tabs
+    - navigation.tabs # Навигация в виде табов
+    - navigation.sections # Секции в навигации
+    - toc.integrate # Интегрировать оглавление страницы в навигацию
+    - search.suggest # Подсказки при поиске
+    - content.code.copy # Кнопка "копировать" для блоков кода
+  # Настраиваем палитру и переключатель тем
+  palette:
+    - scheme: default # Светлая тема
+      primary: 'indigo'
+      accent: 'indigo'
+      toggle:
+        icon: material/brightness-7
+        name: To Dark theme
+    - scheme: slate # Темная тема
+      primary: 'indigo'
+      accent: 'indigo'
+      toggle:
+        icon: material/brightness-4
+        name: To Light Theme
+
+extra:
+  alternate:
+    - name: English
+      link: /en/
+      lang: en
+    - name: Русский
+      link: /ru/
+      lang: ru
+
+# Расширения для Markdown
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
