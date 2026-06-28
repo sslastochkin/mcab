@@ -1,0 +1,99 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcab"
+version = "0.1.0"
+description = "Monte Carlo A/B Testing Library - comprehensive tools for A/B test design and analysis"
+readme = "README.md"
+authors = [
+    {name = "Sergey Lastochkin"}
+]
+license = {text = "MIT"}
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
+keywords = [
+    "ab-testing",
+    "monte-carlo",
+    "statistics",
+    "hypothesis-testing",
+    "experimentation",
+    "data-science",
+    "bootstrap",
+    "permutation-test",
+    "multiple-testing",
+    "experiments",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "numpy>=1.20.0",
+    "pandas>=1.3.0",
+    "scipy>=1.7.0",
+    "matplotlib>=3.4.0",
+    "seaborn>=0.11.0",
+    "joblib>=1.0.0",
+    "tqdm>=4.60.0",
+    "threadpoolctl>=3.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=3.0.0",
+    "black>=22.0.0",
+    "flake8>=4.0.0",
+    "mypy>=0.950",
+    "isort>=5.10.0",
+]
+docs = [
+    "sphinx>=4.5.0",
+    "sphinx-rtd-theme>=1.0.0",
+    "numpydoc>=1.2.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/sslastochkin/mcab"
+Documentation = "https://sslastochkin.github.io/mcab/"
+Repository = "https://github.com/sslastochkin/mcab"
+"Bug Tracker" = "https://github.com/sslastochkin/mcab/issues"
+
+[tool.setuptools]
+packages = ["mcab"]
+package-dir = {"" = "src"}
+
+[tool.setuptools.package-data]
+mcab = ["py.typed"]
+
+[tool.black]
+line-length = 100
+target-version = ['py38', 'py39', 'py310', 'py311']
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --cov=mcab --cov-report=html --cov-report=term"
