@@ -8,3 +8,5 @@ nav:
 
 theme:
   name: material
+  features:
+    - navigation.tabs
