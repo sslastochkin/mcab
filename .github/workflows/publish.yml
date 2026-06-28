@@ -1,0 +1,31 @@
+name: Publish to PyPI
+
+on:
+  push:
+    tags:
+      - "v*.*.*"   # триггер на теги вида v0.1.0, v1.2.3 и т.д.
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    environment: pypi          # должно совпадать с именем в Trusted Publishing
+    permissions:
+      id-token: write          # обязательно для OIDC (без хранения секретов!)
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tools
+        run: pip install build
+
+      - name: Build package
+        run: python -m build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
