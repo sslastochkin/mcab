@@ -32,15 +32,6 @@ theme:
         icon: material/brightness-4
         name: To Light Theme
 
-extra:
-  alternate:
-    - name: English
-      link: /en/
-      lang: en
-    - name: Русский
-      link: /ru/
-      lang: ru
-
 # Расширения для Markdown
 markdown_extensions:
   - admonition
