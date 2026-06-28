@@ -1,3 +1,3 @@
 # About
 
-text
+Some words about
