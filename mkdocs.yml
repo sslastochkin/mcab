@@ -3,9 +3,10 @@ site_description: MCAB Tutorial & Documentation
 site_url: https://sslastochkin.github.io/mcab/
 
 nav:
-  - 'Главная': 'index.md'
-  - 'Начало работы':
+  - 'Main': 'index.md'
+  - 'Tutorial':
     - 'About': 'about.md'
+    - 'About2': 'about2.md'
 
 # Настройка темы
 theme:
