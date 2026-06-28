@@ -1,3 +1,3 @@
 # Main page
 
-Index docs info.
+Index docs info
