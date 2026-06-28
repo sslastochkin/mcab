@@ -372,11 +372,25 @@ class _DesignerBase:
         control_size: Optional[Union[int, float]] = None,
         n_sims: int = 5_000,
         n_jobs: int = 1,
-        verbose: bool = True
+        verbose: bool = True,
+        as_rejection: bool = True
     ):
         """
         Makes n_sims simulations of test power.
-        Returns vector of 0 and 1, where 1 = test discovered an effect at self.alpha significance level, 0 otherwise.
+
+        Parameters
+        ----------
+        as_rejection : bool, default=True
+            If True, returns a vector of 0 and 1, where 1 = test discovered an
+            effect at self.alpha significance level, 0 otherwise. If False,
+            returns the raw p-values vector instead of the rejection indicators
+            (useful when the caller needs the p-values themselves).
+
+        Returns
+        -------
+        np.array
+            Vector of rejection indicators (0/1) if ``as_rejection=True``,
+            otherwise the raw p-values vector.
         """
         pval_func = pval_func or self.pval_func
         if pval_func is None:
@@ -397,13 +411,13 @@ class _DesignerBase:
         else:
             ParallelClass = Parallel(n_jobs=n_jobs, initializer=_worker_init_warnings)
 
-        rejections = ParallelClass(
-            delayed(self._calculate_some_single_power)(i, pval_func, n_controls, effect, n_jobs, None)
+        results = ParallelClass(
+            delayed(self._calculate_some_single_power)(i, pval_func, n_controls, effect, n_jobs, None, as_rejection)
             for i in range(n_sims)
         )
 
-        rejections = np.array(rejections)
-        return rejections
+        results = np.array(results)
+        return results
     
     def calculate_power_curve(
         self,
@@ -943,13 +957,17 @@ class DesignerIid(_DesignerBase):
         n_controls: int,
         effect: float,
         n_jobs: int,
-        idx: np.array
+        idx: np.array,
+        as_rejection: bool = True
     ):
         """
         Single simulation of power.
-        Returns 1 if test discovered an effect at the self.alpha significance level, 0 otherwise.
-        
-        This method now delegates to  _single_sim with return_rejection=True.
+
+        If ``as_rejection=True`` returns 1 if the test discovered an effect at
+        the self.alpha significance level, 0 otherwise. If ``as_rejection=False``
+        returns the raw p-value instead.
+
+        Delegates to _single_sim with return_rejection=as_rejection.
         """
         return self._single_sim(
             seed=seed,
@@ -958,7 +976,7 @@ class DesignerIid(_DesignerBase):
             n_jobs=n_jobs,
             idx=idx,
             effect=effect,
-            return_rejection=True
+            return_rejection=as_rejection
         )
     
 class DesignerRatio(_DesignerBase):
@@ -1171,13 +1189,17 @@ class DesignerRatio(_DesignerBase):
         n_controls: int,
         effect: float,
         n_jobs: int,
-        idx: np.array
+        idx: np.array,
+        as_rejection: bool = True
     ):
         """
         Single simulation of power for ratio metrics.
-        Returns 1 if test discovered an effect at the self.alpha significance level, 0 otherwise.
-        
-        This method now delegates to  _single_sim with return_rejection=True.
+
+        If ``as_rejection=True`` returns 1 if the test discovered an effect at
+        the self.alpha significance level, 0 otherwise. If ``as_rejection=False``
+        returns the raw p-value instead.
+
+        Delegates to _single_sim with return_rejection=as_rejection.
         """
         return self._single_sim(
             seed=seed,
@@ -1186,7 +1208,7 @@ class DesignerRatio(_DesignerBase):
             n_jobs=n_jobs,
             idx=idx,
             effect=effect,
-            return_rejection=True
+            return_rejection=as_rejection
         )
 
 
@@ -1379,13 +1401,17 @@ class DesignerRatioLin(_DesignerBase):
         n_controls: int,
         effect: float,
         n_jobs: int,
-        idx: np.array
+        idx: np.array,
+        as_rejection: bool = True
     ):
         """
         Single simulation of power for a linearized ratio metric.
-        Returns 1 if the test detected an effect at self.alpha, 0 otherwise.
 
-        Delegates to _single_sim with return_rejection=True.
+        If ``as_rejection=True`` returns 1 if the test detected an effect at
+        self.alpha, 0 otherwise. If ``as_rejection=False`` returns the raw
+        p-value instead.
+
+        Delegates to _single_sim with return_rejection=as_rejection.
         """
         return self._single_sim(
             seed=seed,
@@ -1394,7 +1420,7 @@ class DesignerRatioLin(_DesignerBase):
             n_jobs=n_jobs,
             idx=idx,
             effect=effect,
-            return_rejection=True
+            return_rejection=as_rejection
         )
 
 
@@ -1554,13 +1580,17 @@ class DesignerDept1s(_DesignerBase):
         n_controls: int,
         effect: float,
         n_jobs: int,
-        idx: np.array
+        idx: np.array,
+        as_rejection: bool = True
     ):
         """
         Single simulation of power.
-        Returns 1 if test discovered an effect at the self.alpha significance level, 0 otherwise.
-        
-        This method now delegates to  _single_sim with return_rejection=True.
+
+        If ``as_rejection=True`` returns 1 if the test discovered an effect at
+        the self.alpha significance level, 0 otherwise. If ``as_rejection=False``
+        returns the raw p-value instead.
+
+        Delegates to _single_sim with return_rejection=as_rejection.
         """
         return self._single_sim(
             seed=seed,
@@ -1569,7 +1599,7 @@ class DesignerDept1s(_DesignerBase):
             n_jobs=n_jobs,
             idx=idx,
             effect=effect,
-            return_rejection=True
+            return_rejection=as_rejection
         )
     
 class _BenchMarkerBase:
