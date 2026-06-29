@@ -1,3 +1,3 @@
 # About
 
-Some words about
+Some words about.
