@@ -3,7 +3,7 @@ site_description: MCAB Tutorial & Documentation
 site_url: https://sslastochkin.github.io/mcab/
 
 nav:
-  - 'Main': 'README.md'
+  - 'Main': README.md
   - 'Tutorial':
     - 'About': 'about.md'
     - 'About2': 'about2.md'
