@@ -13,7 +13,7 @@ You can install the package directly from PyPI:
 pip install mcab
 ```
 
-## [Docs & Tutorial](https://sslastochkin.github.io/mcab/tutorial/)
+**[Docs & Tutorial](https://sslastochkin.github.io/mcab/tutorial/)**
 
 ## Main Features
 - ...
