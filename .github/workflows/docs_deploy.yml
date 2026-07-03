@@ -8,6 +8,7 @@ on:
       - 'docs/**'
       - '.github/workflows/docs_deploy.yml'
       - 'mkdocs_requirements.txt'
+      - 'mkdocs.yml'
 
 permissions:
   contents: write
