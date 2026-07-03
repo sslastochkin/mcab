@@ -4,7 +4,8 @@ site_url: https://sslastochkin.github.io/mcab/
 
 nav:
   - 'Main': README.md
-  - 'Tutorial': 'tutorial.md'
+  - 'Tutorial': 
+    - 'Tutorial': 'tutorial.md'
     - 'About': 'about.md'
     - 'About2': 'about2.md'
 
