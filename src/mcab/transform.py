@@ -1,10 +1,16 @@
-from typing import List, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 import numpy as np
 from scipy import stats
-from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.base import is_classifier
+from sklearn.linear_model import (
+    LinearRegression,
+    Ridge,
+    Lasso,
+    ElasticNet,
+    LogisticRegression
+)
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 
@@ -12,10 +18,12 @@ from .plots import plot_comparison_bars
 
 __all__ = [
     'Linearizer',
+    'CUPAC',
     'CUPED',
     'PostStratification',
-    'CUPAC',
+    'coef_pvalue_table',
 ]
+
 
 def apply_linearization(num: np.ndarray, denom: np.ndarray, theta: float) -> np.ndarray:
     """Linearized metric for a single group.
@@ -26,15 +34,37 @@ def apply_linearization(num: np.ndarray, denom: np.ndarray, theta: float) -> np.
     """
     return num - theta * denom
 
-def Linearizer(test, control=None, use_pool_theta=False):
-    """Hypothesis testing via ratio-metric linearization + t-test.
 
-    test:           (num_array, denom_array) for the test group
-    control:        (num_array, denom_array) for the control group
-    use_pool_theta: if True, theta is estimated on the pool of both groups,
-                    if False, theta is estimated only on the control group
+def Linearizer(
+    test: Tuple[np.ndarray, np.ndarray],
+    control: Optional[Tuple[np.ndarray, np.ndarray]] = None,
+    use_pool_theta: bool = False,
+) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray, float]]:
+    """Ratio-metric linearization for hypothesis testing via a t-test.
 
-    return: pvalue, delta (metric difference test - control)
+    Turns a per-user ratio metric ``num / denom`` into a linearized
+    per-user metric ``num - theta * denom`` that can be fed into an ordinary
+    two-sample t-test while preserving the ratio's point estimate.
+
+    Parameters
+    ----------
+    test : tuple of numpy.ndarray
+        ``(num_array, denom_array)`` for the test group: the ratio numerator
+        and denominator per user (e.g. total session length and number of
+        sessions).
+    control : tuple of numpy.ndarray, optional
+        ``(num_array, denom_array)`` for the control group. If ``None``, only
+        the test group is linearized and returned.
+    use_pool_theta : bool, default False
+        If ``True``, ``theta`` is estimated on the pooled data of both groups;
+        if ``False``, ``theta`` is estimated only on the control group.
+
+    Returns
+    -------
+    numpy.ndarray or tuple
+        If ``control`` is ``None``, the linearized test-group array. Otherwise
+        a tuple ``(lin_test, lin_control, theta)`` with the linearized arrays of
+        both groups and the ``theta`` used.
     """
     num_t, denom_t = test
 
@@ -56,611 +86,835 @@ def Linearizer(test, control=None, use_pool_theta=False):
 
     return lin_t, lin_c, theta
 
-def _ols_coef_inference(Z, y, coef, intercept, fit_intercept):
-    """OLS inference for coefficients: standard errors, t- and p-values.
+# ------------------------------------------------------------------ inference
 
-    Z:            design matrix WITHOUT the intercept column, shape (n, p)
-    y:            target, shape (n,)
-    coef:         coefficient estimates (without intercept), length p
-    intercept:    intercept estimate
+def _hc_weights(
+    resid: np.ndarray,
+    Zd: np.ndarray,
+    XtX_inv: np.ndarray,
+    cov_type: str,
+    n: int,
+    rank: int,
+) -> np.ndarray:
+    """Per-observation squared-residual weights for an HC sandwich estimator.
+
+    Implements the White / MacKinnon-White family used by statsmodels:
+    - 'HC0': e_i^2
+    - 'HC1': n / (n - rank) * e_i^2
+    - 'HC2': e_i^2 / (1 - h_i)
+    - 'HC3': e_i^2 / (1 - h_i)^2
+    where ``h_i`` are the leverages (diagonal of the hat matrix).
+    """
+    e2 = resid ** 2
+    ct = cov_type.upper()
+    if ct == 'HC0':
+        return e2
+    if ct == 'HC1':
+        return (n / (n - rank)) * e2
+    # HC2 / HC3 need leverages
+    hat = np.einsum('ij,jk,ik->i', Zd, XtX_inv, Zd)
+    hat = np.clip(hat, 0.0, 1.0 - 1e-10)
+    if ct == 'HC2':
+        return e2 / (1.0 - hat)
+    if ct == 'HC3':
+        return e2 / (1.0 - hat) ** 2
+    raise ValueError(f"unknown cov_type {cov_type!r}; expected one of "
+                     f"'HC0','HC1','HC2','HC3','nonrobust'")
+
+
+def _sandwich_cov(
+    Zd: np.ndarray,
+    resid: np.ndarray,
+    XtX_inv: np.ndarray,
+    cov_type: str,
+    dof: float,
+    rank: int,
+) -> np.ndarray:
+    """Coefficient covariance for a linear model given ``(Z'Z)^-1`` (via pinv).
+
+    ``cov_type='nonrobust'`` returns the classical homoskedastic covariance
+    ``sigma^2 (Z'Z)^-1``; any 'HC*' value returns the heteroskedasticity-robust
+    sandwich ``(Z'Z)^-1 Z' diag(omega) Z (Z'Z)^-1``.
+    """
+    n = Zd.shape[0]
+    if str(cov_type).lower() == 'nonrobust':
+        sigma2 = float(resid @ resid) / dof
+        return sigma2 * XtX_inv
+    w = _hc_weights(resid, Zd, XtX_inv, cov_type, n, rank)
+    meat = Zd.T @ (Zd * w[:, None])
+    return XtX_inv @ meat @ XtX_inv
+
+
+def _ols_coef_inference(
+    Z: np.ndarray,
+    y: np.ndarray,
+    coef: np.ndarray,
+    intercept: float,
+    fit_intercept: bool,
+    cov_type: str = 'HC3',
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """OLS inference for coefficients: robust standard errors, t- and p-values.
+
+    Z:             design matrix WITHOUT the intercept column, shape (n, p)
+    y:             target, shape (n,)
+    coef:          coefficient estimates (without intercept), length p
+    intercept:     intercept estimate
     fit_intercept: whether the intercept was accounted for during fitting
+    cov_type:      covariance estimator:
+                   - 'HC0'/'HC1'/'HC2'/'HC3': heteroskedasticity-robust
+                     (White / MacKinnon-White) sandwich standard errors;
+                   - 'nonrobust': classical homoskedastic OLS covariance.
+                   Default 'HC3' is the recommended small-sample robust choice.
 
-    The p-value is computed via a two-sided t-test for H0: coefficient = 0.
-    For rank-deficient design matrices (full one-hot encoding + intercept)
-    the pseudo-inverse is used, and the number of degrees of freedom is
-    derived from the rank.
+    Standard errors are computed with the sandwich estimator
+    ``(Z'Z)^-1 Z' diag(omega) Z (Z'Z)^-1`` where the weights ``omega`` depend on
+    ``cov_type`` (HC0: e^2, HC1: n/(n-k) e^2, HC2: e^2/(1-h), HC3: e^2/(1-h)^2).
+    These match statsmodels' ``OLS(...).fit(cov_type=...)`` on full-rank designs
+    but, unlike statsmodels, the pseudo-inverse keeps the estimator well-defined
+    for the rank-deficient design matrices (full one-hot + intercept) used here.
+    The p-value is a two-sided t-test for H0: coefficient = 0.
 
-    return: (se, tvalues, pvalues) - arrays of length p (per coefficient).
+    return: (se, tvalues, pvalues) - arrays of length p.
     """
     Z = np.asarray(Z, dtype=float)
     y = np.asarray(y, dtype=float)
     if Z.ndim == 1:
         Z = Z.reshape(-1, 1)
     n = Z.shape[0]
+    coef = np.asarray(coef, dtype=float).ravel()
     if fit_intercept:
         Zd = np.column_stack([np.ones(n), Z])
-        beta = np.concatenate([[intercept], np.asarray(coef, dtype=float)])
+        beta = np.concatenate([[float(intercept)], coef])
     else:
-        Zd = Z
-        beta = np.asarray(coef, dtype=float)
+        Zd, beta = Z, coef
     rank = np.linalg.matrix_rank(Zd)
     dof = n - rank
     resid = y - Zd @ beta
     if dof <= 0:
         nan = np.full(len(coef), np.nan)
         return nan, nan, nan
-    sigma2 = float(resid @ resid) / dof
     XtX_inv = np.linalg.pinv(Zd.T @ Zd)
-    se_all = np.sqrt(np.clip(np.diag(sigma2 * XtX_inv), 0, None))
+    cov = _sandwich_cov(Zd, resid, XtX_inv, cov_type=cov_type,
+                        dof=dof, rank=rank)
+    se = np.sqrt(np.clip(np.diag(cov), 0, None))
     with np.errstate(divide='ignore', invalid='ignore'):
-        t_all = beta / np.where(se_all > 0, se_all, np.nan)
-    p_all = 2 * stats.t.sf(np.abs(t_all), df=dof)
-    if fit_intercept:
-        return se_all[1:], t_all[1:], p_all[1:]
-    return se_all, t_all, p_all
+        t = beta / np.where(se > 0, se, np.nan)
+    p = 2 * stats.t.sf(np.abs(t), df=dof)
+    return (se[1:], t[1:], p[1:]) if fit_intercept else (se, t, p)
 
 
-class CUPED:
-    """CUPED variance reduction via a single pre-experiment covariate.
+def _ridge_coef_inference(
+    Z: np.ndarray,
+    y: np.ndarray,
+    coef: np.ndarray,
+    intercept: float,
+    alpha: float,
+    fit_intercept: bool,
+    cov_type: str = 'HC3',
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Robust inference for ridge coefficients (sandwich formula).
 
-    Fits a linear regression ``y ~ X`` on a single covariate and returns
-    the residuals ``y - y_hat`` (the metric cleaned of the variance that is
-    explained by the covariate).
+    The ridge estimator is linear in ``y``: with ``A = (Z'Z + Lambda)^-1``
+    (the intercept left unpenalized) ``beta_hat = A Z' y``. Its covariance is
+    the sandwich ``A Z' diag(omega) Z A``. With ``cov_type='nonrobust'`` the
+    homoskedastic weights ``omega_i = sigma^2`` reproduce the classical
+    ``sigma^2 A (Z'Z) A``; with an 'HC*' value the weights are the
+    heteroskedasticity-robust squared residuals (optionally leverage-adjusted
+    using the ridge hat matrix ``H = Z A Z'``), giving standard errors that are
+    valid under heteroskedasticity.
+
+    Note: ridge estimates are biased; these SEs describe the variability of
+    the shrunk estimator, not of an unbiased effect. The effective dof are
+    ``n - tr(H)``.
     """
-
-    def __init__(self):
-        self.lreg = LinearRegression(copy_X=False, fit_intercept=True)
-
-    def _check_X(self, X):
-        if X.ndim == 1:
-            X = X.reshape(-1, 1)
-        if X.shape[1] > 1:
-            raise ValueError('X should be one-dimensional')
-        return X
-
-    def fit(self, X, y):
-
-        X = self._check_X(X)
-        self.lreg.fit(X, y)
-        self.theta = self.lreg.coef_[0]
-        # quality measures (in-sample)
-        y_arr = np.asarray(y)
-        resid = y_arr - self.lreg.predict(X)
-        var_y = y_arr.var()
-        self.var_reduction_ = float(1 - resid.var() / var_y) if var_y > 0 else 0.0
-        self.r2_ = float(self.lreg.score(X, y))
-        # significance of theta
-        Xa = np.asarray(X, dtype=float)
-        if Xa.ndim == 1:
-            Xa = Xa.reshape(-1, 1)
-        se, t, p = _ols_coef_inference(
-            Xa, y_arr, self.lreg.coef_, self.lreg.intercept_, fit_intercept=True
-        )
-        self.se_ = float(se[0])
-        self.tvalue_ = float(t[0])
-        self.pvalue_ = float(p[0])
-        return self
-
-    def predict(self, X):
-        X = self._check_X(X)
-        return self.lreg.predict(X)
-
-    def fit_predict(self, X, y):
-        self.fit(X, y)
-        return self.predict(X)
-
-    def score(self, X, y, plot=True):
-        """CUPED quality measures.
-
-        Returns a dict:
-        - ``var_reduction`` - share of removed metric variance ``1 - Var(resid)/Var(y)``.
-          This is the main measure for CUPED: roughly the factor by which the
-          variance of the effect estimate is reduced (in-sample it equals R-squared).
-        - ``r2`` - coefficient of determination of the covariate-on-metric regression.
-        - ``resid_std`` - standard deviation of the residuals (the metric after CUPED).
-
-        Pass a hold-out sample to compute the measures out-of-sample.
-        """
-        y = np.asarray(y)
-        X = self._check_X(X)
-        resid = y - self.predict(X)
-        var_y = y.var()
-        var_r = resid.var()
-        vr = float(1 - var_r / var_y) if var_y > 0 else 0.0
-        if plot:
-            plot_comparison_bars(
-                baseline=var_y,
-                values=[var_r],
-                labels=['CUPED'],
-                title='CUPED Performance',
-                ylabel='Variance',
-                figsize=(5, 3.5)
-            )
-        return {
-            'var_reduction': vr,
-            'r2': float(self.lreg.score(X, y)),
-            'resid_std': float(resid.std()),
-        }
-
-    def cuped(self, X, y, fit=True):
-        if fit:
-            self.fit(X, y)
-        return y - self.predict(X)
+    Z = np.asarray(Z, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if Z.ndim == 1:
+        Z = Z.reshape(-1, 1)
+    n = Z.shape[0]
+    coef = np.asarray(coef, dtype=float).ravel()
+    if fit_intercept:
+        Zd = np.column_stack([np.ones(n), Z])
+        beta = np.concatenate([[float(intercept)], coef])
+        penalty = np.concatenate([[0.0], np.full(len(coef), float(alpha))])
+    else:
+        Zd, beta = Z, coef
+        penalty = np.full(len(coef), float(alpha))
+    ZtZ = Zd.T @ Zd
+    A = np.linalg.pinv(ZtZ + np.diag(penalty))
+    # ridge hat matrix H = Z A Z'; effective dof = n - tr(H)
+    hat = np.einsum('ij,jk,ik->i', Zd, A, Zd)
+    dof = n - float(hat.sum())
+    resid = y - Zd @ beta
+    if dof <= 0:
+        nan = np.full(len(coef), np.nan)
+        return nan, nan, nan
+    if str(cov_type).lower() == 'nonrobust':
+        sigma2 = float(resid @ resid) / dof
+        cov = sigma2 * (A @ ZtZ @ A)
+    else:
+        ct = cov_type.upper()
+        e2 = resid ** 2
+        if ct == 'HC0':
+            w = e2
+        elif ct == 'HC1':
+            w = (n / dof) * e2
+        elif ct == 'HC2':
+            w = e2 / np.clip(1.0 - hat, 1e-10, None)
+        elif ct == 'HC3':
+            w = e2 / np.clip(1.0 - hat, 1e-10, None) ** 2
+        else:
+            raise ValueError(f"unknown cov_type {cov_type!r}; expected one of "
+                             f"'HC0','HC1','HC2','HC3','nonrobust'")
+        meat = Zd.T @ (Zd * w[:, None])
+        cov = A @ meat @ A
+    se = np.sqrt(np.clip(np.diag(cov), 0, None))
+    with np.errstate(divide='ignore', invalid='ignore'):
+        t = beta / np.where(se > 0, se, np.nan)
+    p = 2 * stats.t.sf(np.abs(t), df=dof)
+    return (se[1:], t[1:], p[1:]) if fit_intercept else (se, t, p)
 
 
-class PostStratification:
-    """Post-stratification via linear regression on covariates.
+def _logistic_coef_inference(
+    Z: np.ndarray,
+    y: np.ndarray,
+    coef: np.ndarray,
+    intercept: float,
+    fit_intercept: bool,
+    cov_type: str = 'HC0',
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Robust Wald inference for logistic-regression coefficients.
 
-    Works analogously to :class:`CUPED`: fits a linear regression
-    ``y ~ X`` and returns the residuals ``y - y_hat`` (the metric cleaned
-    of the variance explained by the covariates).
+    ``cov_type='nonrobust'`` uses the model-based inverse Fisher information
+    ``(Z' diag(p(1-p)) Z)^-1``. Any 'HC*' value returns the robust
+    ("sandwich" / Huber-White) covariance
+    ``B^-1 (Z' diag(e_i^2) Z) B^-1`` with ``B = Z' diag(p(1-p)) Z`` and
+    residuals ``e_i = y_i - p_i``, which is consistent even if the Bernoulli
+    variance is misspecified (quasi-MLE). Significance is a two-sided Wald
+    z-test. Matches statsmodels' ``GLM(..., Binomial()).fit(cov_type='HC0')``.
+    """
+    Z = np.asarray(Z, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if Z.ndim == 1:
+        Z = Z.reshape(-1, 1)
+    n = Z.shape[0]
+    coef = np.asarray(coef, dtype=float).ravel()
+    if fit_intercept:
+        Zd = np.column_stack([np.ones(n), Z])
+        beta = np.concatenate([[float(intercept)], coef])
+    else:
+        Zd, beta = Z, coef
+    eta = Zd @ beta
+    p = np.where(eta >= 0, 1.0 / (1.0 + np.exp(-eta)),
+                 np.exp(eta) / (1.0 + np.exp(eta)))
+    w = np.clip(p * (1.0 - p), 1e-12, None)
+    bread = np.linalg.pinv(Zd.T @ (Zd * w[:, None]))
+    if str(cov_type).lower() == 'nonrobust':
+        cov = bread
+    else:
+        if cov_type.upper() not in ('HC0', 'HC1', 'HC2', 'HC3'):
+            raise ValueError(f"unknown cov_type {cov_type!r}; expected one of "
+                             f"'HC0','HC1','HC2','HC3','nonrobust'")
+        # robust "meat": squared score contributions e_i^2 * z_i z_i'
+        resid = y - p
+        meat = Zd.T @ (Zd * (resid ** 2)[:, None])
+        cov = bread @ meat @ bread
+    se = np.sqrt(np.clip(np.diag(cov), 0, None))
+    with np.errstate(divide='ignore', invalid='ignore'):
+        z = beta / np.where(se > 0, se, np.nan)
+    pv = 2 * stats.norm.sf(np.abs(z))
+    return (se[1:], z[1:], pv[1:]) if fit_intercept else (se, z, pv)
 
-    String (categorical) columns are detected automatically and run through
-    one-hot encoding (dummy variables). Numeric columns are passed into the
-    regression as-is. If category values that were not seen during training
-    arrive in ``predict``, they are simply ignored
-    (``handle_unknown='ignore'`` - all dummy columns are set to zero for them).
+
+# ------------------------------------------------------------ coef p-values
+
+def _final_estimator(model: Any) -> Any:
+    """Return the terminal estimator of a (possibly Pipeline-wrapped) model."""
+    return model[-1] if isinstance(model, Pipeline) else model
+
+
+def _design_matrix(model: Any, X: Any) -> np.ndarray:
+    """Design matrix seen by the terminal estimator.
+
+    If ``model`` is a Pipeline, every step but the last is applied to ``X``;
+    otherwise ``X`` is returned as a 2-D float array.
+    """
+    if isinstance(model, Pipeline) and len(model.steps) > 1:
+        Xt = X
+        for _, step in model.steps[:-1]:
+            Xt = step.transform(Xt)
+        Z = np.asarray(Xt, dtype=float)
+    else:
+        Z = np.asarray(X, dtype=float)
+    return Z.reshape(-1, 1) if Z.ndim == 1 else Z
+
+def _strip_known_prefixes(names: List[str], prep: Pipeline) -> List[str]:
+    """Strip sklearn's step/transformer name prefixes from feature names.
+
+    ``sklearn`` prefixes the names returned by ``get_feature_names_out`` with
+    the name of the pipeline step and, inside a
+    :class:`~sklearn.compose.ColumnTransformer`, the name of the inner
+    transformer (e.g. ``'prep__cat__color'``). This removes the longest
+    matching known prefix from each name so the result is human-readable.
 
     Parameters
     ----------
-    cat_cols : list of str, optional
-        Explicit list of categorical columns. If not provided and a
-        :class:`pandas.DataFrame` is passed as input, categorical columns are
-        detected automatically by dtype (object / category / string).
-    fit_intercept : bool, default True
-        Passed to :class:`sklearn.linear_model.LinearRegression`.
+    names : list of str
+        Raw feature names produced by the preprocessing pipeline.
+    prep : sklearn.pipeline.Pipeline
+        The preprocessing pipeline (``model[:-1]``, i.e. every step except the
+        final regressor) whose step and transformer names define the prefixes.
+
+    Returns
+    -------
+    list of str
+        Feature names with a single known prefix removed where present.
     """
+    # prep = model[:-1] — Pipeline без последнего шага (регрессора)
+    prefixes = []
+    for step_name, step in prep.steps:
+        prefixes.append(step_name + '__')
+        # ColumnTransformer: собрать имена внутренних трансформеров
+        sub = getattr(step, 'transformers_', None) or getattr(step, 'transformers', [])
+        for t_name, _, _ in sub:
+            prefixes.append(t_name + '__')
+    # длинные префиксы приоритетнее — сортируем
+    prefixes.sort(key=len, reverse=True)
+    result = []
+    for name in names:
+        for prefix in prefixes:
+            if name.startswith(prefix):
+                name = name[len(prefix):]
+                break
+        result.append(name)
+    return result
 
-    def __init__(self, cat_cols: Optional[List[str]] = None, fit_intercept: bool = True):
-        self.cat_cols = cat_cols
-        self.fit_intercept = fit_intercept
-        self.pipeline: Optional[Pipeline] = None
+def _feature_names(model: Any, Z: np.ndarray) -> List[str]:
+    """Best-effort feature names for the design-matrix columns."""
+    if isinstance(model, Pipeline) and len(model.steps) > 1:
+        prep = model[:-1]
+        if hasattr(prep, 'get_feature_names_out'):
+            try:
+                raw = list(prep.get_feature_names_out())
+                names = _strip_known_prefixes(raw, prep)
+                if len(names) == Z.shape[1]:
+                    return names
+            except Exception:
+                pass
+    if isinstance(model, Pipeline) and hasattr(X := None, 'columns'):
+        pass  # handled elsewhere
+    return [f'x{i}' for i in range(Z.shape[1])]
 
-    @staticmethod
-    def _to_frame(X) -> pd.DataFrame:
-        if isinstance(X, pd.Series):
-            return X.to_frame()
-        elif isinstance(X, pd.DataFrame):
-            return X
-        X = np.asarray(X)
-        if X.ndim == 1:
-            X = X.reshape(-1, 1)
-        return pd.DataFrame(X, columns=[f'x{i}' for i in range(X.shape[1])])
 
-    def _detect_cat_cols(self, X: pd.DataFrame) -> List[str]:
-        if self.cat_cols is not None:
-            return [c for c in self.cat_cols if c in X.columns]
-        # auto-detect string/categorical columns by dtype
-        return [
-            c for c in X.columns
-            if (pd.api.types.is_object_dtype(X[c])
-                or isinstance(X[c].dtype, pd.CategoricalDtype)
-                or pd.api.types.is_string_dtype(X[c]))
-        ]
+def coef_pvalue_table(
+    model: Any,
+    X: Any,
+    y: Any,
+    cov_type: Optional[str] = None,
+    feature_names: Optional[List[str]] = None,
+) -> pd.DataFrame:
+    """Coefficient table with robust standard errors and p-values.
 
-    def _build_pipeline(self, cat_cols: List[str], num_cols: List[str]) -> Pipeline:
-        ohe = OneHotEncoder(handle_unknown='ignore', sparse_output=False)
-        transformers = []
-        if cat_cols:
-            transformers.append(('cat', ohe, cat_cols))
-        if num_cols:
-            transformers.append(('num', 'passthrough', num_cols))
-        preprocessor = ColumnTransformer(
-            transformers=transformers,
-            remainder='drop',
+    Dispatches on the fitted estimator type and computes robust (sandwich)
+    inference for its coefficients:
+
+    - :class:`~sklearn.linear_model.LinearRegression` -> :func:`_ols_coef_inference`
+      (heteroskedasticity-robust HC standard errors);
+    - :class:`~sklearn.linear_model.Ridge` -> :func:`_ridge_coef_inference`
+      (robust ridge sandwich standard errors);
+    - :class:`~sklearn.linear_model.LogisticRegression` -> :func:`_logistic_coef_inference`
+      (robust Huber-White Wald standard errors).
+
+    All three underlying estimators return *robust* standard errors by default,
+    matching statsmodels' ``cov_type='HC*'`` on full-rank designs while still
+    supporting the rank-deficient (full one-hot + intercept) design matrices via
+    the pseudo-inverse. ``linearmodels`` / ``statsmodels`` are intentionally not
+    used here because neither exposes a robust covariance for the *penalized*
+    ridge estimator, and statsmodels breaks on the rank-deficient designs this
+    module relies on.
+
+    Parameters
+    ----------
+    model : fitted estimator or Pipeline
+        A fitted ``LinearRegression`` / ``Ridge`` / ``LogisticRegression`` (or a
+        :class:`~sklearn.pipeline.Pipeline` ending in one of them).
+    X : array-like or DataFrame
+        Features. When ``model`` is a Pipeline, the preprocessing steps are
+        applied to obtain the design matrix; otherwise ``X`` is used as is.
+    y : array-like
+        Target used to fit the model (needed to evaluate residuals).
+    cov_type : str, optional
+        Robust covariance estimator forwarded to the inference function
+        ('HC0'/'HC1'/'HC2'/'HC3', or 'nonrobust'). Defaults to 'HC3' for
+        OLS/Ridge and 'HC0' for logistic regression.
+    feature_names : list of str, optional
+        Names for the design-matrix columns; auto-derived from the pipeline (or
+        generated as ``x0, x1, ...``) when omitted.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns ``feature / coef / se / stat / pvalue`` (``stat`` is a t-value
+        for OLS/Ridge and a z-value for logistic regression), ordered by
+        descending ``|coef|``.
+
+    Raises
+    ------
+    TypeError
+        If the terminal estimator is not one of the three supported types.
+    """
+    est = _final_estimator(model)
+    y = np.asarray(y, dtype=float)
+    Z = _design_matrix(model, X)
+
+    coef = np.ravel(getattr(est, 'coef_', np.array([]))).astype(float)
+    intercept = np.ravel(getattr(est, 'intercept_', 0.0)).astype(float)
+    intercept = float(intercept[0]) if intercept.size else 0.0
+    fit_intercept = bool(getattr(est, 'fit_intercept', True))
+
+    if isinstance(est, LogisticRegression):
+        stat_name, kind = 'z', 'logistic'
+        ct = cov_type or 'HC0'
+        se, stat, pv = _logistic_coef_inference(
+            Z, y, coef, intercept, fit_intercept, cov_type=ct)
+    elif isinstance(est, Ridge):
+        stat_name, kind = 't', 'ridge'
+        ct = cov_type or 'HC3'
+        alpha = float(getattr(est, 'alpha', 1.0))
+        se, stat, pv = _ridge_coef_inference(
+            Z, y, coef, intercept, alpha, fit_intercept, cov_type=ct)
+    elif isinstance(est, LinearRegression):
+        stat_name, kind = 't', 'ols'
+        ct = cov_type or 'HC3'
+        se, stat, pv = _ols_coef_inference(
+            Z, y, coef, intercept, fit_intercept, cov_type=ct)
+    else:
+        raise TypeError(
+            f"coef_pvalue_table supports LinearRegression, Ridge and "
+            f"LogisticRegression (optionally inside a Pipeline), got "
+            f"{type(est).__name__}"
         )
-        return Pipeline([
-            ('prep', preprocessor),
-            ('lreg', LinearRegression(copy_X=False, fit_intercept=self.fit_intercept)),
-        ])
 
-    def fit(self, X, y):
-        X = self._to_frame(X)
-        y = np.asarray(y)
-        cat_cols = self._detect_cat_cols(X)
-        num_cols = [c for c in X.columns if c not in cat_cols]
-        self.cat_cols_ = cat_cols
-        self.num_cols_ = num_cols
-        self.pipeline = self._build_pipeline(cat_cols, num_cols)
-        self.pipeline.fit(X, y)
-        lreg = self.pipeline.named_steps['lreg']
-        self.coef_ = lreg.coef_
-        self.intercept_ = lreg.intercept_
-        self.feature_names_ = list(
-            self.pipeline.named_steps['prep'].get_feature_names_out()
-        )
-        # category frequencies on the training set (to find rare/useless ones)
-        self._cat_counts = {
-            c: X[c].value_counts(dropna=False).to_dict() for c in cat_cols
-        }
-        # quality measures (in-sample)
-        resid = y - self.pipeline.predict(X)
-        var_y = y.var()
-        self.var_reduction_ = float(1 - resid.var() / var_y) if var_y > 0 else 0.0
-        self.r2_ = float(self.pipeline.score(X, y))
-        # coefficient significance (in-sample OLS inference)
-        Z = self.pipeline.named_steps['prep'].transform(X)
-        se, tvals, pvals = _ols_coef_inference(
-            Z, y, lreg.coef_, lreg.intercept_, fit_intercept=self.fit_intercept
-        )
-        self.se_ = se
-        self.tvalues_ = tvals
-        self.pvalues_ = pvals
-        return self
+    names = feature_names if feature_names is not None else _feature_names(model, Z)
+    if len(names) != len(coef):
+        names = [f'x{i}' for i in range(len(coef))]
 
-    def predict(self, X):
-        if self.pipeline is None:
-            raise RuntimeError('PostStratification is not fitted yet, call fit() first')
-        X = self._to_frame(X)
-        return self.pipeline.predict(X)
-
-    def fit_predict(self, X, y):
-        self.fit(X, y)
-        return self.predict(X)
-
-    def post_stratification(self, X, y, fit=True):
-        """Metric residuals after post-stratification: ``y - y_hat``."""
-        if fit:
-            self.fit(X, y)
-        return np.asarray(y) - self.predict(X)
-
-    def score(self, X, y):
-        """Post-stratification quality measures.
-
-        Returns a dict:
-        - ``var_reduction`` - share of removed variance ``1 - Var(resid)/Var(y)``,
-          the main usefulness measure (in-sample it equals R-squared).
-        - ``r2`` - coefficient of determination of the regression.
-        - ``resid_std`` - standard deviation of the residuals.
-
-        Pass a hold-out sample for an honest out-of-sample evaluation.
-        """
-        y = np.asarray(y)
-        resid = y - self.predict(X)
-        var_y = y.var()
-        vr = float(1 - resid.var() / var_y) if var_y > 0 else 0.0
-        return {
-            'var_reduction': vr,
-            'r2': float(self.pipeline.score(self._to_frame(X), y)),
-            'resid_std': float(resid.std()),
-        }
-
-    def coefficients(self) -> pd.DataFrame:
-        """Table of regression coefficients across all features.
-
-        For categorical columns the rows correspond to individual dummy
-        categories (with their training frequency), for numeric columns - to
-        the column itself. The ``se`` / ``tvalue`` / ``pvalue`` columns hold
-        the OLS inference of coefficient significance (H0: coefficient = 0).
-        """
-        if self.pipeline is None:
-            raise RuntimeError('PostStratification is not fitted yet, call fit() first')
-        rows = []
-        for name, coef, se, tval, pval in zip(
-            self.feature_names_, self.coef_, self.se_, self.tvalues_, self.pvalues_
-        ):
-            if name.startswith('cat__'):
-                rest = name[len('cat__'):]
-                col, _, cat = rest.rpartition('_')
-                count = self._cat_counts.get(col, {}).get(cat)
-                if count is None:
-                    # the category may be a number / contain '_' - try to match by value
-                    for cand, cnt in self._cat_counts.get(col, {}).items():
-                        if str(cand) == cat:
-                            count = cnt
-                            break
-                rows.append({'column': col, 'category': cat, 'kind': 'cat',
-                             'coef': coef, 'count': count,
-                             'se': se, 'tvalue': tval, 'pvalue': pval})
-            elif name.startswith('num__'):
-                col = name[len('num__'):]
-                rows.append({'column': col, 'category': None, 'kind': 'num',
-                             'coef': coef, 'count': None,
-                             'se': se, 'tvalue': tval, 'pvalue': pval})
-            else:
-                rows.append({'column': name, 'category': None, 'kind': '?',
-                             'coef': coef, 'count': None,
-                             'se': se, 'tvalue': tval, 'pvalue': pval})
-        df = pd.DataFrame(rows)
-        df['abs_coef'] = df['coef'].abs()
-        return df.sort_values('abs_coef', ascending=False).reset_index(drop=True)
-
-    def column_importance(self, X, y) -> pd.DataFrame:
-        """Importance of each column via the leave-one-column-out method.
-
-        For every column we re-fit the model without it and look at how much
-        ``var_reduction`` drops. The larger the drop (``importance``), the more
-        useful the column. Values near zero (or negative) are candidates for
-        removal.
-        """
-        X = self._to_frame(X)
-        y = np.asarray(y)
-        full_vr = self.score(X, y)['var_reduction'] if self.pipeline is not None \
-            else PostStratification(self.cat_cols, self.fit_intercept).fit(X, y).var_reduction_
-        rows = []
-        for col in X.columns:
-            sub = PostStratification(
-                cat_cols=([c for c in self.cat_cols if c != col]
-                          if self.cat_cols is not None else None),
-                fit_intercept=self.fit_intercept,
-            )
-            sub.fit(X.drop(columns=[col]), y)
-            rows.append({'column': col,
-                         'var_reduction_without': sub.var_reduction_,
-                         'importance': full_vr - sub.var_reduction_})
-        return (pd.DataFrame(rows)
-                .sort_values('importance', ascending=False)
-                .reset_index(drop=True))
-
-    def find_useless_columns(self, X, y, threshold: float = 1e-4) -> List[str]:
-        """Columns whose removal barely worsens var_reduction.
-
-        Returns the list of columns with ``importance < threshold`` (see
-        :meth:`column_importance`).
-        """
-        imp = self.column_importance(X, y)
-        return imp.loc[imp['importance'] < threshold, 'column'].tolist()
-
-    def find_useless_categories(self, min_count: int = 30,
-                                coef_threshold: float = 1e-6,
-                                alpha: float = 0.05) -> pd.DataFrame:
-        """Useless / unreliable categories.
-
-        Flags dummy categories that have:
-        - a training frequency below ``min_count`` (the coefficient estimate
-          is unreliable) - the ``rare`` flag;
-        - a coefficient magnitude below ``coef_threshold`` (a negligible
-          contribution to the prediction) - the ``negligible`` flag;
-        - a coefficient p-value above ``alpha`` (statistically
-          indistinguishable from zero) - the ``insignificant`` flag.
-
-        Returns a subtable of :meth:`coefficients` with these flags for the
-        categorical rows only.
-        """
-        df = self.coefficients()
-        df = df[df['kind'] == 'cat'].copy()
-        df['rare'] = df['count'].apply(
-            lambda c: (c is None) or (c < min_count)
-        )
-        df['negligible'] = df['abs_coef'] < coef_threshold
-        df['insignificant'] = df['pvalue'] > alpha
-        mask = df['rare'] | df['negligible'] | df['insignificant']
-        return df[mask].reset_index(drop=True)
-
+    df = pd.DataFrame({
+        'feature': names,
+        'coef': coef,
+        'se': np.asarray(se, dtype=float),
+        'stat': np.asarray(stat, dtype=float),
+        'pvalue': np.asarray(pv, dtype=float),
+    })
+    df['abs_coef'] = df['coef'].abs()
+    return (df.sort_values('abs_coef', ascending=False)
+              .drop(columns='abs_coef')
+              .reset_index(drop=True))
 
 class CUPAC:
-    """CUPAC (Control Using Predictions As Covariates) on a linear model.
+    """CUPAC variance reduction via a fitted predictor of the target.
 
-    Generalizes :class:`CUPED` to many (possibly noisy) pre-experiment
-    covariates. Instead of using a single covariate directly, CUPAC first
-    trains a (regularized) linear predictor of the metric ``y_hat = g(X)``
-    and then applies a CUPED-style adjustment using that prediction as a
-    single synthetic covariate::
+    CUPAC (Control Using Predictions As Covariates) builds a preprocessing +
+    regression pipeline that predicts the experiment metric from pre-experiment
+    covariates and returns the residuals, which have lower variance than the
+    raw metric while keeping the treatment effect unbiased.
 
-        theta = Cov(y, y_hat) / Var(y_hat)
-        y_adj = y - theta * (y_hat - mean(y_hat))
-
-    Mean-centering keeps ``mean(y_adj) == mean(y)``. With ``theta`` chosen
-    optimally the achievable variance reduction equals ``corr(y, y_hat) ** 2``.
-
-    The interface mirrors :class:`CUPED` and :class:`PostStratification`:
-    ``fit`` / ``predict`` / ``fit_predict`` / ``score`` plus the transform
-    method :meth:`cupac`. As in the sibling classes, ``predict(X)`` returns
-    the quantity that is subtracted from ``y``, so that
-    ``cupac(X, y) == y - predict(X)``.
-
-    String (categorical) columns are auto-detected and one-hot encoded;
-    numeric columns are standardized (so that the regularization penalty
-    treats features on a comparable scale).
+    The estimator wraps an sklearn regressor (or classifier) with an optional
+    :class:`~sklearn.compose.ColumnTransformer` that one-hot encodes categorical
+    columns and scales numeric ones. Preprocessing options are supplied at
+    :meth:`fit` time.
 
     Parameters
     ----------
-    regularization : {'none', 'ridge', 'lasso', 'elasticnet'}, default 'none'
-        Which linear estimator backs the predictor ``g(X)``. Aliases
-        ``'ols'`` / ``'linear'`` (none), ``'l2'`` (ridge), ``'l1'`` (lasso),
-        ``'elastic'`` / ``'en'`` (elasticnet) are accepted.
-    alpha : float, default 1.0
-        Regularization strength for ridge / lasso / elasticnet. Ignored for
-        the unregularized estimator.
-    l1_ratio : float, default 0.5
-        ElasticNet mixing parameter (0 = ridge-like, 1 = lasso-like). Only
-        used when ``regularization='elasticnet'``.
-    cat_cols : list of str, optional
-        Explicit list of categorical columns. If not provided and a
-        :class:`pandas.DataFrame` is passed, categorical columns are detected
-        automatically by dtype (object / category / string).
-    fit_intercept : bool, default True
-        Passed to the underlying linear estimator.
-    scale_numeric : bool, default True
-        Standardize numeric columns before fitting. Recommended when a
-        regularized estimator is used so that the penalty is scale-invariant.
-    reg_kwargs : dict, optional
-        Extra keyword arguments forwarded to the underlying sklearn estimator
-        (e.g. ``max_iter`` for lasso / elasticnet).
+    model : str or estimator
+        Either a key of :attr:`_MODELS` (``'ols'``, ``'log'``, ``'ridge'``,
+        ``'lasso'``, ``'elastic_net'``) selecting a default sklearn estimator,
+        or an already-constructed estimator instance.
+    name : str, optional
+        Name of the regression step in the pipeline. Defaults to the model key
+        when ``model`` is a known string, otherwise ``'model'``.
+
+    Attributes
+    ----------
+    _MODELS : dict
+        Mapping of string keys to sklearn estimator classes.
+    pipe : sklearn.pipeline.Pipeline or None
+        The fitted pipeline; ``None`` until :meth:`fit` is called.
     """
 
-    def __init__(self,
-                 regularization: str = 'none',
-                 alpha: float = 1.0,
-                 l1_ratio: float = 0.5,
-                 cat_cols: Optional[List[str]] = None,
-                 fit_intercept: bool = True,
-                 scale_numeric: bool = True,
-                 reg_kwargs: Optional[Dict] = None):
-        self.regularization = regularization
-        self.alpha = alpha
-        self.l1_ratio = l1_ratio
-        self.cat_cols = cat_cols
-        self.fit_intercept = fit_intercept
-        self.scale_numeric = scale_numeric
-        self.reg_kwargs = reg_kwargs or {}
-        self.pipeline: Optional[Pipeline] = None
+    _MODELS = {
+        'ols':         LinearRegression,
+        'log':         LogisticRegression,
+        'ridge':       Ridge,
+        'lasso':       Lasso,
+        'elastic_net': ElasticNet
+    }
+
+    def __init__(
+        self,
+        model: Union[str, Any],
+        name: Optional[str] = None,
+    ) -> None:
+        if name is None:
+            if model in self._MODELS:
+                name = model
+            else:
+                name = 'model'
+        self.name = name
+
+        if isinstance(model, str):
+            model = self._MODELS[model]()
+
+        self._model =  model
+        
+        self.pipe = None
+        self.cat_cols = None
+        self.cat_encoder = None
+        self.excluded_categories = None
+        self.scaler = None
+        self.no_scale_cols = None
+        self.resids = None
 
     @staticmethod
-    def _to_frame(X) -> pd.DataFrame:
+    def _to_frame(X: Any) -> pd.DataFrame:
+        """Coerce array-like / Series / DataFrame input into a DataFrame.
+
+        1-D inputs are reshaped into a single column; anonymous columns are
+        named ``x0, x1, ...``.
+        """
+        if isinstance(X, pd.Series):
+            return X.to_frame()
         if isinstance(X, pd.DataFrame):
             return X
         X = np.asarray(X)
         if X.ndim == 1:
             X = X.reshape(-1, 1)
         return pd.DataFrame(X, columns=[f'x{i}' for i in range(X.shape[1])])
-
+    
     def _detect_cat_cols(self, X: pd.DataFrame) -> List[str]:
-        if self.cat_cols is not None:
-            return [c for c in self.cat_cols if c in X.columns]
-        # auto-detect string/categorical columns by dtype
+        """Resolve which columns of ``X`` are treated as categorical.
+
+        If :attr:`cat_cols` is ``True``, object / categorical / string columns
+        are auto-detected; if it is an explicit list, only those present in
+        ``X`` are kept; otherwise no columns are categorical.
+        """
+        if self.cat_cols == True:
+            cat_cols = [c for c in X.columns
+                    if (pd.api.types.is_object_dtype(X[c])
+                        or isinstance(X[c].dtype, pd.CategoricalDtype)
+                        or pd.api.types.is_string_dtype(X[c]))]
+        elif self.cat_cols:
+            cat_cols = [c for c in self.cat_cols if c in X.columns]
+        else:
+            cat_cols = []
+        return cat_cols
+            
+    def _get_categories(
+        self, cat_cols: List[str], X: pd.DataFrame
+    ) -> List[np.ndarray]:
+        """Explicit category levels per categorical column for the encoder.
+
+        For each column in ``cat_cols`` the observed non-null unique values are
+        collected, dropping any levels listed in :attr:`excluded_categories`.
+        """
+        if not cat_cols:
+            return []
         return [
-            c for c in X.columns
-            if (pd.api.types.is_object_dtype(X[c])
-                or isinstance(X[c].dtype, pd.CategoricalDtype)
-                or pd.api.types.is_string_dtype(X[c]))
+            np.array([v for v in pd.unique(X[c].dropna())
+                        if v not in set(self.excluded_categories.get(c, []))],
+                        dtype=object)
+            for c in cat_cols
         ]
+    
+    def _get_num_cols(self, X: pd.DataFrame) -> Tuple[List[str], List[str]]:
+        """Split numeric columns into scaled vs. passthrough groups.
 
-    def _make_regressor(self):
-        """Build the underlying linear estimator from the regularization choice."""
-        reg = (self.regularization or 'none').lower()
-        if reg in ('none', 'ols', 'linear'):
-            return LinearRegression(copy_X=False, fit_intercept=self.fit_intercept,
-                                    **self.reg_kwargs)
-        if reg in ('ridge', 'l2'):
-            return Ridge(alpha=self.alpha, fit_intercept=self.fit_intercept,
-                         **self.reg_kwargs)
-        if reg in ('lasso', 'l1'):
-            return Lasso(alpha=self.alpha, fit_intercept=self.fit_intercept,
-                         **self.reg_kwargs)
-        if reg in ('elasticnet', 'elastic', 'en'):
-            return ElasticNet(alpha=self.alpha, l1_ratio=self.l1_ratio,
-                              fit_intercept=self.fit_intercept, **self.reg_kwargs)
-        raise ValueError(
-            "regularization must be one of "
-            "{'none', 'ridge', 'lasso', 'elasticnet'}, got "
-            f"{self.regularization!r}"
-        )
+        Returns ``(num_cols_scale, num_cols_pass)``. When no scaler is set,
+        every numeric column is passthrough. Otherwise columns listed in
+        :attr:`no_scale_cols` are passed through and the rest are scaled.
+        """
+        num_cols_all = X.select_dtypes(include='number').columns.tolist()
+        if self.scaler is None:
+            return [], num_cols_all
 
-    def _build_pipeline(self, cat_cols: List[str], num_cols: List[str]) -> Pipeline:
+        num_cols_scale = [c for c in num_cols_all if c not in self.no_scale_cols]
+        num_cols_pass  = [c for c in num_cols_all if c in self.no_scale_cols]
+        return num_cols_scale, num_cols_pass
+
+    def build_pipeline(self, X: pd.DataFrame) -> Pipeline:
+        """Assemble the preprocessing + regression pipeline for ``X``.
+
+        Builds a :class:`~sklearn.compose.ColumnTransformer` with (optional)
+        categorical encoding, numeric scaling and passthrough steps according
+        to the options set on the instance, followed by the regression step.
+
+        Parameters
+        ----------
+        X : pandas.DataFrame
+            Training features used to infer categorical/numeric columns.
+
+        Returns
+        -------
+        sklearn.pipeline.Pipeline
+            The unfitted pipeline ending in the regression estimator.
+        """
+        pipe_list = []
         transformers = []
+        
+        cat_cols   = self._detect_cat_cols(X)
+        categories = self._get_categories(cat_cols, X)
+
+        if cat_cols and self.cat_encoder is not None:
+            transformers.append(('cat', self.cat_encoder(categories=categories), cat_cols))
+
+        num_cols_scale, num_cols_pass = self._get_num_cols(X)
+        if num_cols_scale:
+            transformers.append(('scale', self.scaler, num_cols_scale))
+
+        if num_cols_pass:
+            transformers.append(('pass', 'passthrough', num_cols_pass))
+
+        if transformers:
+            prep = ColumnTransformer(transformers=transformers, remainder='drop')
+            pipe_list.append(('prep', prep))
+
+        pipe_list.append((self.name, self._model))
+        return Pipeline(pipe_list)
+
+    def __repr__(self) -> str:
+        return f'BaseModel(name="{self.name}")'
+
+    def fit(
+        self,
+        X: Any,
+        y: Any,
+        cat_cols: Optional[Union[bool, List[str]]] = None,
+        cat_encoder: Optional[Callable] = None,
+        excluded_categories: Optional[Dict[str, List]] = None,
+        scaler: Optional[Any] = None,
+        no_scale_cols: Optional[List[str]] = None,
+    ) -> 'CUPAC':
+        """Fit the CUPAC pipeline on features ``X`` and target ``y``.
+
+        Parameters
+        ----------
+        X : array-like, Series or DataFrame
+            Pre-experiment covariates used to predict the metric.
+        y : array-like
+            Target metric to be adjusted.
+        cat_cols : bool or list of str, optional
+            Categorical columns to encode: ``True`` to auto-detect, or an
+            explicit list of column names. Requires ``cat_encoder``.
+        cat_encoder : callable, optional
+            Factory returning an encoder accepting a ``categories`` argument
+            (e.g. ``OneHotEncoder``). Required when ``cat_cols`` is given.
+        excluded_categories : dict, optional
+            Mapping ``column -> levels`` of category levels to drop from the
+            encoder's known categories.
+        scaler : estimator, optional
+            Scaler applied to numeric columns (e.g. ``StandardScaler()``). When
+            ``None`` numeric columns are passed through unscaled.
+        no_scale_cols : list of str, optional
+            Numeric columns to pass through without scaling.
+
+        Returns
+        -------
+        CUPAC
+            The fitted instance (``self``).
+
+        Raises
+        ------
+        ValueError
+            If exactly one of ``cat_cols`` / ``cat_encoder`` is provided.
+        """
         if cat_cols:
-            ohe = OneHotEncoder(handle_unknown='ignore', sparse_output=False)
-            transformers.append(('cat', ohe, cat_cols))
-        if num_cols:
-            num_step = StandardScaler() if self.scale_numeric else 'passthrough'
-            transformers.append(('num', num_step, num_cols))
-        preprocessor = ColumnTransformer(
-            transformers=transformers,
-            remainder='drop',
-        )
-        return Pipeline([
-            ('prep', preprocessor),
-            ('reg', self._make_regressor()),
-        ])
+            if cat_encoder is None:
+                raise ValueError('cat_cols is not None but cat_encoder is None')
+            
+        if cat_encoder is not None:
+            if cat_cols is None:
+                raise ValueError('cat_encoder is not None but cat_cols is None')
+            
+        self.cat_cols = cat_cols or []
+        self.cat_encoder = cat_encoder
+        self.excluded_categories = excluded_categories or {}
+        self.scaler = scaler
+        self.no_scale_cols = no_scale_cols or []
 
-    def fit(self, X, y):
         X = self._to_frame(X)
-        y = np.asarray(y, dtype=float)
-        cat_cols = self._detect_cat_cols(X)
-        num_cols = [c for c in X.columns if c not in cat_cols]
-        self.cat_cols_ = cat_cols
-        self.num_cols_ = num_cols
-        self.pipeline = self._build_pipeline(cat_cols, num_cols)
-        self.pipeline.fit(X, y)
-        reg = self.pipeline.named_steps['reg']
-        self.coef_ = np.asarray(reg.coef_, dtype=float).ravel()
-        self.intercept_ = reg.intercept_
-        self.feature_names_ = list(
-            self.pipeline.named_steps['prep'].get_feature_names_out()
-        )
-        # base predictor output and the CUPED step on top of it
-        p = np.asarray(self.pipeline.predict(X), dtype=float)
-        self.prediction_mean_ = float(p.mean())
-        var_p = p.var()
-        self.theta_ = float(np.cov(y, p, ddof=0)[0, 1] / var_p) if var_p > 0 else 0.0
-        # quality measures (in-sample)
-        adj = y - self.theta_ * (p - self.prediction_mean_)
-        var_y = y.var()
-        self.var_reduction_ = float(1 - adj.var() / var_y) if var_y > 0 else 0.0
-        self.predictor_r2_ = float(self.pipeline.score(X, y))
-        # significance of theta from the CUPED regression y ~ y_hat
-        intercept = float(y.mean() - self.theta_ * self.prediction_mean_)
-        se, t, pv = _ols_coef_inference(
-            p.reshape(-1, 1), y, [self.theta_], intercept, fit_intercept=True
-        )
-        self.se_ = float(se[0])
-        self.tvalue_ = float(t[0])
-        self.pvalue_ = float(pv[0])
+
+        self.pipe = self.build_pipeline(X)
+        self.pipe.fit(X, y)
+
         return self
+    
+    def predict(self, X: Any) -> np.ndarray:
+        """Predict the target for ``X`` using the fitted pipeline.
 
-    def predict_outcome(self, X):
-        """Raw output of the base predictor ``g(X)`` (before the CUPED step)."""
-        if self.pipeline is None:
-            raise RuntimeError('CUPAC is not fitted yet, call fit() first')
+        Raises
+        ------
+        ValueError
+            If the model has not been fitted yet.
+        """
+        if self.pipe is None:
+            raise ValueError('Model is not fitted')
         X = self._to_frame(X)
-        return np.asarray(self.pipeline.predict(X), dtype=float)
+        return self.pipe.predict(X)
 
-    def predict(self, X):
-        """The quantity subtracted from ``y``: ``theta * (g(X) - mean(g))``."""
-        p = self.predict_outcome(X)
-        return self.theta_ * (p - self.prediction_mean_)
-
-    def fit_predict(self, X, y):
+    def fit_predict(self, X: Any, y: Any) -> np.ndarray:
+        """Fit on ``(X, y)`` and return predictions for the same ``X``."""
         self.fit(X, y)
         return self.predict(X)
 
-    def cupac(self, X, y, fit=True):
-        """Adjusted metric after CUPAC: ``y - theta * (g(X) - mean(g))``."""
-        if fit:
-            self.fit(X, y)
-        return np.asarray(y, dtype=float) - self.predict(X)
+    def predict_proba(self, X: Any) -> np.ndarray:
+        """Predict class probabilities for ``X`` (classifier models only).
 
-    def score(self, X, y):
-        """CUPAC quality measures.
+        Raises
+        ------
+        ValueError
+            If the model has not been fitted yet.
+        """
+        if self.pipe is None:
+            raise ValueError('Model is not fitted')
+        X = self._to_frame(X)
+        return self.pipe.predict_proba(X)
 
-        Returns a dict:
-        - ``var_reduction`` - share of removed metric variance
-          ``1 - Var(y_adj)/Var(y)``, the main measure (in-sample it equals
-          ``corr(y, g(X)) ** 2``).
-        - ``predictor_r2`` - coefficient of determination of the base
-          predictor ``g(X)`` on the metric.
-        - ``resid_std`` - standard deviation of the adjusted metric.
-        - ``theta`` - the CUPED coefficient on the prediction.
+    def fit_predict_proba(self, X: Any, y: Any) -> np.ndarray:
+        """Fit on ``(X, y)`` and return class probabilities for the same ``X``."""
+        self.fit(X, y)
+        return self.predict_proba(X)
 
-        Pass a hold-out sample to compute the measures out-of-sample.
+    def score(
+        self,
+        X: Any,
+        y: Any,
+        plot: bool = True,
+        predict_proba: bool = False,
+    ) -> Dict[str, float]:
+        """Report variance-reduction diagnostics for the fitted predictor.
+
+        Computes the residual metric (``y`` minus the prediction, or minus the
+        positive-class probability when ``predict_proba`` is ``True``) and
+        summarizes how much its variance shrank relative to the raw metric.
+
+        Parameters
+        ----------
+        X : array-like
+            Features to evaluate on.
+        y : array-like
+            Observed target values.
+        plot : bool, default True
+            If ``True``, draw a bar chart comparing raw vs. adjusted variance.
+        predict_proba : bool, default False
+            Use predicted positive-class probabilities instead of point
+            predictions when forming the residual.
+
+        Returns
+        -------
+        dict
+            Keys ``var_reduction`` (fraction of variance removed),
+            ``predictor_r2`` (regression R^2, ``nan`` for classifiers),
+            ``resid_std`` (std of the adjusted metric) and ``theta``.
         """
         y = np.asarray(y, dtype=float)
-        adj = y - self.predict(X)
-        var_y = y.var()
-        vr = float(1 - adj.var() / var_y) if var_y > 0 else 0.0
+        if predict_proba:
+            adj = y - self.predict_proba(X)[:, 1]
+        else:
+            adj = y - self.predict(X)
+        var_y, var_adj = y.var(), adj.var()
+        vr = float(1 - var_adj / var_y) if var_y > 0 else 0.0
+        reg = self.pipeline.named_steps['reg']
+        r2 = (float('nan') if is_classifier(reg)
+              else float(self.pipeline.score(self._to_frame(X), y)))
+        if plot:
+            plot_comparison_bars(
+                baseline=var_y, values=[var_adj], labels=['CUPAC'],
+                title='CUPAC Performance', ylabel='Variance', figsize=(5, 3.5),
+            )
         return {
             'var_reduction': vr,
-            'predictor_r2': float(self.pipeline.score(self._to_frame(X), y)),
+            'predictor_r2': r2,
             'resid_std': float(adj.std()),
             'theta': float(self.theta_),
         }
+    
+class CUPED(CUPAC):
+    """CUPED variance reduction with a single pre-experiment covariate.
 
-    def coefficients(self) -> pd.DataFrame:
-        """Table of the base predictor coefficients across all features.
+    A special case of :class:`CUPAC` that fits an OLS regression on exactly one
+    covariate. The adjusted metric ``y - theta * X`` reduces variance while
+    keeping the treatment effect unbiased.
 
-        For categorical columns the rows correspond to individual dummy
-        categories, for numeric columns - to the column itself. These are the
-        coefficients of the (possibly regularized) predictor ``g(X)``; with
-        ridge / lasso / elasticnet they are shrunk and should be read as
-        predictive weights rather than unbiased effect estimates.
+    Parameters
+    ----------
+    name : str, optional
+        Name of the regression step. Defaults to ``'CUPED'``.
+    """
+
+    def __init__(self, name: Optional[str] = None) -> None:
+        name = name or 'CUPED'
+        super().__init__('ols', name)
+
+    def _check_X(self, X: np.ndarray) -> np.ndarray:
+        """Validate that ``X`` is (or can be reshaped to) a single column.
+
+        Raises
+        ------
+        ValueError
+            If ``X`` has more than one column.
         """
-        if self.pipeline is None:
-            raise RuntimeError('CUPAC is not fitted yet, call fit() first')
-        rows = []
-        for name, coef in zip(self.feature_names_, self.coef_):
-            if name.startswith('cat__'):
-                rest = name[len('cat__'):]
-                col, _, cat = rest.rpartition('_')
-                rows.append({'column': col, 'category': cat, 'kind': 'cat',
-                             'coef': coef})
-            elif name.startswith('num__'):
-                col = name[len('num__'):]
-                rows.append({'column': col, 'category': None, 'kind': 'num',
-                             'coef': coef})
-            else:
-                rows.append({'column': name, 'category': None, 'kind': '?',
-                             'coef': coef})
-        df = pd.DataFrame(rows)
-        df['abs_coef'] = df['coef'].abs()
-        return df.sort_values('abs_coef', ascending=False).reset_index(drop=True)
+        if X.ndim == 1:
+            X = X.reshape(-1, 1)
+        if X.shape[1] > 1:
+            raise ValueError('X should be one-dimensional')
+        return X
+
+    def fit(self, X: np.ndarray, y: Any) -> 'CUPED':
+        """Fit the OLS predictor on a single covariate ``X`` and target ``y``.
+
+        Returns
+        -------
+        CUPED
+            The fitted instance (``self``).
+        """
+        X = self._check_X(X)
+        return super().fit(X, y)
+
+    def cuped(self, X: np.ndarray, y: Any, fit: bool = True) -> np.ndarray:
+        """Return the CUPED-adjusted metric ``y - prediction(X)``.
+
+        Parameters
+        ----------
+        X : numpy.ndarray
+            Single pre-experiment covariate.
+        y : array-like
+            Target metric to adjust.
+        fit : bool, default True
+            If ``True``, (re)fit the model on ``(X, y)`` before adjusting;
+            if ``False``, use the already-fitted model.
+
+        Returns
+        -------
+        numpy.ndarray
+            The variance-reduced (adjusted) metric.
+        """
+        if fit:
+            self.fit(X, y)
+        return y - self.predict(X)
+
+
+class PostStratification(CUPAC):
+    """Post-stratification adjustment via OLS on stratum covariates.
+
+    A :class:`CUPAC` variant using an OLS regressor to remove between-strata
+    variance from the metric after the experiment has run.
+
+    Parameters
+    ----------
+    name : str, optional
+        Name of the regression step. Defaults to ``'PostStratification'``.
+    """
+
+    def __init__(self, name: Optional[str] = None) -> None:
+        name = name or 'PostStratification'
+        super().__init__('ols', name)
