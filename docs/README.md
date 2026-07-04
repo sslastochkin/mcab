@@ -1,5 +1,6 @@
 # MCAB: Monte Carlo Simulations for A/B Testing
 
+[![PyPI version](https://img.shields.io/pypi/v/mcab)](https://pypi.org/project/mcab/)
 [![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow)](https://opensource.org/licenses/MIT)
 
