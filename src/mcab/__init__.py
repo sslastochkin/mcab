@@ -49,7 +49,8 @@ Example Usage
 ... )
 """
 
-__version__ = "0.1.01"
+from mcab._version import __version__
+
 __author__ = "Sergey Lastochkin"
 
 # Core classes
