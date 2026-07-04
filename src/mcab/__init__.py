@@ -49,7 +49,7 @@ Example Usage
 ... )
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.01"
 __author__ = "Sergey Lastochkin"
 
 # Core classes
@@ -87,6 +87,8 @@ from .mstats import (
     # Permutation tests
     sign_permutation_test,
     permutation_test_2s,
+    # Bucket test
+    bucket_test_2s,
     # Multiple testing corrections
     multiple_pvalue_correction,
     CORRECTION_METHODS,
@@ -100,6 +102,14 @@ from .mstats import (
     holm_sidak,
     no_multiple_correction,
     delta_method_pvalue
+)
+
+from .transform import (
+    Linearizer,
+    CUPAC,
+    CUPED,
+    PostStratification,
+    coef_pvalue_table,
 )
 
 __all__ = [
@@ -132,6 +142,8 @@ __all__ = [
     # Permutation tests
     'sign_permutation_test',
     'permutation_test_2s',
+    # Bucket test
+    'bucket_test_2s',
     # delta method
     'delta_method_pvalue',
     # Multiple testing
@@ -145,5 +157,11 @@ __all__ = [
     'benjamini_krieger_yekutieli',
     'sidak',
     'holm_sidak',
-    'no_multiple_correction'
+    'no_multiple_correction',
+    # Transformers
+    'Linearizer',
+    'CUPAC',
+    'CUPED',
+    'PostStratification',
+    'coef_pvalue_table'
 ]
