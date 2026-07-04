@@ -27,6 +27,8 @@ __all__ = [
     # Permutation tests
     'sign_permutation_test',
     'permutation_test_2s',
+    # Bucket test
+    'bucket_test_2s',
     # delta method
     'delta_method_pvalue',
     # Multiple testing corrections
@@ -1156,6 +1158,122 @@ def permutation_test_2s(
     
     # Compute p-value using unified function
     return _perm_pval(t_perm, t_obs, alt)
+
+def bucket_test_2s(
+    test: ArrayLike,
+    control: ArrayLike,
+    pval_func: Callable[[NDArray[np.floating], NDArray[np.floating]], float],
+    n_buckets: int = 100,
+    statistic: Callable = np.mean,
+    statistic_args: Optional[Tuple] = None,
+    statistic_kwargs: Optional[Dict[str, Any]] = None,
+    rng: Optional[Union[int, np.random.Generator]] = None
+) -> float:
+    '''
+    Independent two-sample bucket (aggregation) test.
+
+    Each sample is randomly split into ``n_buckets`` non-overlapping buckets.
+    A ``statistic`` is computed within every bucket, producing ``n_buckets``
+    aggregated values per group. The two resulting arrays of bucket statistics
+    are then compared with a Welch (or Student) two-sample t-test.
+
+    The bucket test is a variance-reduction / robustness technique: by
+    aggregating raw observations into buckets, the per-bucket statistics become
+    approximately normal (CLT), which makes a simple t-test on the bucketed
+    values valid even for heavy-tailed or non-normal raw data. It is also much
+    cheaper than bootstrap/permutation while giving comparable power.
+
+    Parameters
+    ----------
+    test : array-like
+        Test group observations.
+    control : array-like
+        Control group observations.
+    pval_func : callable
+        Function used to compute the p-value from the two arrays of bucket
+        statistics. It is called as ``pval_func(test_buckets, control_buckets)``
+        and must return a float p-value (e.g., a two-sample t-test or
+        Mann-Whitney U test on the bucketed values). Required.
+    n_buckets : int, default=100
+        Number of buckets each group is split into. Must be >= 2 and not
+        exceed the size of the smaller group.
+    statistic : callable, default=np.mean
+        Statistic to compute within each bucket (e.g., np.mean, np.median).
+    statistic_args : tuple, optional
+        Additional positional arguments for statistic.
+    statistic_kwargs : dict, optional
+        Additional keyword arguments for statistic.
+    rng : int or np.random.Generator, optional
+        Random number generator or seed used to shuffle observations into
+        buckets. If None, uses default_rng(42).
+
+    Returns
+    -------
+    float
+        P-value computed by ``pval_func`` on the bucket statistics.
+
+    Notes
+    -----
+    Observations that do not divide evenly among the buckets are distributed so
+    that the first ``len(x) % n_buckets`` buckets receive one extra element.
+    Bucket assignment is randomized to avoid ordering artefacts.
+
+    Examples
+    --------
+    >>> test = np.random.exponential(scale=1.0, size=100_000)
+    >>> control = np.random.exponential(scale=1.05, size=100_000)
+    >>> pval = bucket_test_2s(
+    ...     test, control,
+    ...     pval_func=lambda t, c: stats.ttest_ind(t, c, equal_var=False).pvalue,
+    ...     n_buckets=200,
+    ... )
+
+    >>> # Use a different p-value function on the bucket statistics
+    >>> pval = bucket_test_2s(
+    ...     test, control,
+    ...     pval_func=lambda t, c: stats.mannwhitneyu(t, c).pvalue,
+    ... )
+    '''
+    test = np.asarray(test)
+    control = np.asarray(control)
+
+    assert test.ndim == 1
+    assert control.ndim == 1
+
+    if n_buckets < 2:
+        raise ValueError(f"n_buckets must be >= 2, got {n_buckets}")
+    if n_buckets > min(len(test), len(control)):
+        raise ValueError(
+            f"n_buckets ({n_buckets}) cannot exceed the smaller group size "
+            f"({min(len(test), len(control))})"
+        )
+
+    # Initialize RNG
+    if rng is None:
+        rng = np.random.default_rng(42)
+    elif isinstance(rng, int):
+        rng = np.random.default_rng(rng)
+
+    def _bucket_statistics(x: NDArray[np.floating]) -> NDArray[np.floating]:
+        # Randomly shuffle, then split into (almost) equal-sized buckets
+        shuffled = x[rng.permutation(len(x))]
+        buckets = np.array_split(shuffled, n_buckets)
+        return np.array([
+            apply_statistic(
+                samples=bucket,
+                statistic=statistic,
+                statistic_args=statistic_args,
+                statistic_kwargs=statistic_kwargs
+            )
+            for bucket in buckets
+        ])
+
+    test_buckets = _bucket_statistics(test)
+    control_buckets = _bucket_statistics(control)
+
+    result = pval_func(test_buckets, control_buckets)
+
+    return float(result)
 
 # ------------------------------------------------------------------------------------------------ #
 #                                      Multiple Comparisons                                        #
