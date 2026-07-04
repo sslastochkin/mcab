@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=64", "setuptools-scm>=8", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "mcab"
-version = "0.1.1"
+dynamic = ["version"]   # ← убираем version = "0.1.1", версия берётся из git-тега
 description = "Monte Carlo A/B Testing Library - comprehensive tools for A/B test design and analysis"
 readme = "docs/README.md"
 authors = [
@@ -70,6 +70,9 @@ Homepage = "https://github.com/sslastochkin/mcab"
 Documentation = "https://sslastochkin.github.io/mcab/"
 Repository = "https://github.com/sslastochkin/mcab"
 "Bug Tracker" = "https://github.com/sslastochkin/mcab/issues"
+
+[tool.setuptools_scm]
+write_to = "src/mcab/_version.py"
 
 [tool.setuptools]
 packages = ["mcab"]
