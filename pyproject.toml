@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mcab"
-version = "0.1.01"
+version = "0.1.1"
 description = "Monte Carlo A/B Testing Library - comprehensive tools for A/B test design and analysis"
 readme = "docs/README.md"
 authors = [
