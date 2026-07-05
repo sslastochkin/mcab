@@ -15,4 +15,9 @@ pip install mcab
 ```
 
 ## Main Features
-- ...
+- Fast and computatively efficient Monte Carlo, faster then `for i ...`
+- Multiprocessing supported with `n_jobs=-1`
+- Different effect strategies compatible with any variance reduction
+- Flexible api to reduce variance with ML-models
+- Iid and Ratio metrics simulations
+- Multiple testing corrections simulations
