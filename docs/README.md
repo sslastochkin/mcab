@@ -21,3 +21,6 @@ pip install mcab
 - Flexible api to reduce variance with ML-models
 - Iid and Ratio metrics simulations
 - Multiple testing corrections simulations
+- Ready emperical tests like bootstrap and permutations with optionally multiprocessing
+- Plots and other diagnostics
+- Fast and straight way to compare multiple designs on one data to challenge the best
