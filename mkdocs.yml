@@ -5,8 +5,8 @@ site_url: https://sslastochkin.github.io/mcab/
 nav:
   - 'Main': README.md
   - 'Tutorial': 
-    - 'First steps': 'tutorial/01_first_steps.ipynb',
-    - 'Data and Effects': 'tutorial/02_data_and_effects.ipynb',
+    - 'First steps': 'tutorial/01_first_steps.ipynb'
+    - 'Data and Effects': 'tutorial/02_data_and_effects.ipynb'
 
 theme:
   name: material
