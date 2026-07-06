@@ -1,9 +1,10 @@
+import warnings
+
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 import numpy as np
 from scipy import stats
-from sklearn.base import is_classifier
 from sklearn.linear_model import (
     LinearRegression,
     Ridge,
@@ -13,6 +14,7 @@ from sklearn.linear_model import (
 )
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
 
 from .plots import plot_comparison_bars
 
@@ -200,7 +202,7 @@ def _ols_coef_inference(
     with np.errstate(divide='ignore', invalid='ignore'):
         t = beta / np.where(se > 0, se, np.nan)
     p = 2 * stats.t.sf(np.abs(t), df=dof)
-    return (se[1:], t[1:], p[1:]) if fit_intercept else (se, t, p)
+    return se, t, p
 
 
 def _ridge_coef_inference(
@@ -272,7 +274,7 @@ def _ridge_coef_inference(
     with np.errstate(divide='ignore', invalid='ignore'):
         t = beta / np.where(se > 0, se, np.nan)
     p = 2 * stats.t.sf(np.abs(t), df=dof)
-    return (se[1:], t[1:], p[1:]) if fit_intercept else (se, t, p)
+    return se, t, p
 
 
 def _logistic_coef_inference(
@@ -323,27 +325,54 @@ def _logistic_coef_inference(
     with np.errstate(divide='ignore', invalid='ignore'):
         z = beta / np.where(se > 0, se, np.nan)
     pv = 2 * stats.norm.sf(np.abs(z))
-    return (se[1:], z[1:], pv[1:]) if fit_intercept else (se, z, pv)
+    return se, z, pv
 
 
 # ------------------------------------------------------------ coef p-values
 
 def _final_estimator(model: Any) -> Any:
-    """Return the terminal estimator of a (possibly Pipeline-wrapped) model."""
+    """Return the terminal estimator of a (possibly Pipeline-wrapped) model.
+
+    Handles plain sklearn :class:`~sklearn.pipeline.Pipeline` objects as well
+    as :class:`CUPAC` instances (and its subclasses), which store the fitted
+    pipeline in their ``.pipe`` attribute.
+    """
+    # CUPAC / CUPED / PostStratification — delegate to the inner pipeline
+    if hasattr(model, 'pipe') and isinstance(getattr(model, 'pipe', None), Pipeline):
+        return model.pipe[-1]
     return model[-1] if isinstance(model, Pipeline) else model
 
 
 def _design_matrix(model: Any, X: Any) -> np.ndarray:
     """Design matrix seen by the terminal estimator.
 
-    If ``model`` is a Pipeline, every step but the last is applied to ``X``;
+    If ``model`` is a Pipeline (or a CUPAC instance whose ``.pipe`` is a
+    Pipeline), every preprocessing step but the last is applied to ``X``;
     otherwise ``X`` is returned as a 2-D float array.
     """
-    if isinstance(model, Pipeline) and len(model.steps) > 1:
+    # Resolve the actual sklearn Pipeline
+    pipe = None
+    if isinstance(model, Pipeline):
+        pipe = model
+    elif hasattr(model, 'pipe') and isinstance(getattr(model, 'pipe', None), Pipeline):
+        pipe = model.pipe
+        # Normalise X the same way the model's fit() does:
+        # CUPED uses _check_X (Series → ndarray → reshape → col 'x0'),
+        # other CUPAC subclasses use _to_frame.
+        if hasattr(model, '_check_X'):
+            X = model._to_frame(model._check_X(X))
+        elif hasattr(model, '_to_frame'):
+            X = model._to_frame(X)
+
+    if pipe is not None and len(pipe.steps) > 1:
         Xt = X
-        for _, step in model.steps[:-1]:
+        for _, step in pipe.steps[:-1]:
             Xt = step.transform(Xt)
-        Z = np.asarray(Xt, dtype=float)
+        # OHE with sparse_output=True returns a csr_matrix — convert it
+        try:
+            Z = np.asarray(Xt, dtype=float)
+        except (TypeError, ValueError):
+            Z = np.asarray(Xt.toarray(), dtype=float)
     else:
         Z = np.asarray(X, dtype=float)
     return Z.reshape(-1, 1) if Z.ndim == 1 else Z
@@ -389,20 +418,52 @@ def _strip_known_prefixes(names: List[str], prep: Pipeline) -> List[str]:
         result.append(name)
     return result
 
-def _feature_names(model: Any, Z: np.ndarray) -> List[str]:
-    """Best-effort feature names for the design-matrix columns."""
-    if isinstance(model, Pipeline) and len(model.steps) > 1:
-        prep = model[:-1]
+def _feature_names(model: Any, Z: np.ndarray, X: Any = None) -> List[str]:
+    """Best-effort feature names for the design-matrix columns.
+
+    Works for plain sklearn :class:`~sklearn.pipeline.Pipeline` objects and
+    for :class:`CUPAC` instances (and subclasses) that store their fitted
+    pipeline in ``.pipe``.
+
+    When no pipeline preprocessing is present, tries to use column names from
+    the original ``X`` (Series name or DataFrame columns).
+    """
+    # Resolve the sklearn Pipeline (plain or wrapped inside CUPAC)
+    pipe = None
+    if isinstance(model, Pipeline):
+        pipe = model
+    elif hasattr(model, 'pipe') and isinstance(getattr(model, 'pipe', None), Pipeline):
+        pipe = model.pipe
+
+    if pipe is not None and len(pipe.steps) > 1:
+        prep = pipe[:-1]
         if hasattr(prep, 'get_feature_names_out'):
             try:
                 raw = list(prep.get_feature_names_out())
                 names = _strip_known_prefixes(raw, prep)
                 if len(names) == Z.shape[1]:
+                    # If the pipeline produced generic names like x0, x1, ...
+                    # and the caller supplied original column names via X,
+                    # prefer the original names (e.g. Series.name for CUPED).
+                    if X is not None and all(n == f'x{i}' for i, n in enumerate(names)):
+                        if isinstance(X, pd.Series) and X.name is not None and len(names) == 1:
+                            names = [str(X.name)]
+                        elif isinstance(X, pd.DataFrame) and list(X.columns) != names:
+                            # Only override when DataFrame columns are not also x0, x1...
+                            orig = list(X.columns)
+                            if len(orig) == len(names):
+                                names = orig
                     return names
             except Exception:
                 pass
-    if isinstance(model, Pipeline) and hasattr(X := None, 'columns'):
-        pass  # handled elsewhere
+
+    # Fallback: try to use column names from the original X
+    if X is not None:
+        if isinstance(X, pd.DataFrame) and len(X.columns) == Z.shape[1]:
+            return list(X.columns)
+        if isinstance(X, pd.Series) and X.name is not None and Z.shape[1] == 1:
+            return [str(X.name)]
+
     return [f'x{i}' for i in range(Z.shape[1])]
 
 
@@ -412,6 +473,7 @@ def coef_pvalue_table(
     y: Any,
     cov_type: Optional[str] = None,
     feature_names: Optional[List[str]] = None,
+    sort_by: str = 'significance',
 ) -> pd.DataFrame:
     """Coefficient table with robust standard errors and p-values.
 
@@ -450,18 +512,36 @@ def coef_pvalue_table(
     feature_names : list of str, optional
         Names for the design-matrix columns; auto-derived from the pipeline (or
         generated as ``x0, x1, ...``) when omitted.
+    sort_by : {'significance', 'effect'}, default 'significance'
+        Criterion used to rank feature rows (the ``(Intercept)`` row, when
+        present, is always pinned to the top regardless of this setting):
+
+        ``'significance'``
+            Sort by ``|stat|`` descending (primary), then by ``|coef|``
+            descending (tiebreaker).  Equivalent to sorting by ascending
+            p-value but **robust to p-value underflow**: when many features
+            have ``pvalue == 0.0`` (float64 underflow for ``|stat| > ~37``),
+            the test statistic still distinguishes them.
+
+        ``'effect'``
+            Sort by the *standardised* coefficient ``|coef| * std(feature)``
+            descending (primary), then by ``|stat|`` descending (tiebreaker).
+            Useful in large experiments where almost everything is significant
+            and practical importance matters more than statistical significance.
 
     Returns
     -------
     pandas.DataFrame
         Columns ``feature / coef / se / stat / pvalue`` (``stat`` is a t-value
-        for OLS/Ridge and a z-value for logistic regression), ordered by
-        descending ``|coef|``.
+        for OLS/Ridge and a z-value for logistic regression).  The
+        ``(Intercept)`` row, when present, is always the first row.
 
     Raises
     ------
     TypeError
         If the terminal estimator is not one of the three supported types.
+    ValueError
+        If ``sort_by`` is not one of the supported values.
     """
     est = _final_estimator(model)
     y = np.asarray(y, dtype=float)
@@ -495,21 +575,75 @@ def coef_pvalue_table(
             f"{type(est).__name__}"
         )
 
-    names = feature_names if feature_names is not None else _feature_names(model, Z)
+    # se/stat/pv now include intercept at index 0 when fit_intercept=True
+    if fit_intercept:
+        se_coef, stat_coef, pv_coef = se[1:], stat[1:], pv[1:]
+        se_int, stat_int, pv_int = float(se[0]), float(stat[0]), float(pv[0])
+    else:
+        se_coef, stat_coef, pv_coef = se, stat, pv
+
+    names = feature_names if feature_names is not None else _feature_names(model, Z, X)
     if len(names) != len(coef):
         names = [f'x{i}' for i in range(len(coef))]
 
     df = pd.DataFrame({
         'feature': names,
         'coef': coef,
-        'se': np.asarray(se, dtype=float),
-        'stat': np.asarray(stat, dtype=float),
-        'pvalue': np.asarray(pv, dtype=float),
+        'se': np.asarray(se_coef, dtype=float),
+        'stat': np.asarray(stat_coef, dtype=float),
+        'pvalue': np.asarray(pv_coef, dtype=float),
     })
-    df['abs_coef'] = df['coef'].abs()
-    return (df.sort_values('abs_coef', ascending=False)
-              .drop(columns='abs_coef')
-              .reset_index(drop=True))
+
+    if fit_intercept:
+        intercept_row = pd.DataFrame([{
+            'feature': '(Intercept)',
+            'coef': intercept,
+            'se': se_int,
+            'stat': stat_int,
+            'pvalue': pv_int,
+        }])
+        df = pd.concat([intercept_row, df], ignore_index=True)
+
+    _SORT_BY_VALUES = {'significance', 'effect'}
+    if sort_by not in _SORT_BY_VALUES:
+        raise ValueError(
+            f"sort_by must be one of {sorted(_SORT_BY_VALUES)!r}, got {sort_by!r}"
+        )
+
+    # Pin the intercept row first; sort only feature rows.
+    if fit_intercept:
+        df_intercept = df[df['feature'] == '(Intercept)'].copy()
+        df_features  = df[df['feature'] != '(Intercept)'].copy()
+    else:
+        df_intercept = pd.DataFrame(columns=df.columns)
+        df_features  = df.copy()
+
+    df_features['_abs_stat'] = df_features['stat'].abs()
+    df_features['_abs_coef'] = df_features['coef'].abs()
+
+    if sort_by == 'significance':
+        # Primary: |stat| ↓ (robust to p-value float64 underflow);
+        # tiebreaker: |coef| ↓
+        df_features = df_features.sort_values(
+            ['_abs_stat', '_abs_coef'], ascending=[False, False]
+        )
+    else:  # 'effect'
+        # Primary: standardised coefficient |coef|·std(feature) ↓;
+        # tiebreaker: |stat| ↓ (significance as secondary signal).
+        # Z columns are aligned 1-to-1 with coef (no intercept column in Z).
+        feature_stds = np.std(Z, axis=0)            # shape (n_features,)
+        std_effect   = np.abs(coef) * feature_stds  # shape (n_features,)
+        df_features['_std_effect'] = std_effect
+        df_features = df_features.sort_values(
+            ['_std_effect', '_abs_stat'], ascending=[False, False]
+        )
+        df_features = df_features.drop(columns='_std_effect')
+
+    df_features = df_features.drop(columns=['_abs_stat', '_abs_coef'])
+
+    if df_intercept.empty:
+        return df_features.reset_index(drop=True)
+    return pd.concat([df_intercept, df_features], ignore_index=True)
 
 class CUPAC:
     """CUPAC variance reduction via a fitted predictor of the target.
@@ -675,6 +809,18 @@ class CUPAC:
             transformers.append(('pass', 'passthrough', num_cols_pass))
 
         if transformers:
+            covered_cols = set(cat_cols) | set(num_cols_scale) | set(num_cols_pass)
+            dropped_cols = [c for c in X.columns if c not in covered_cols]
+            if dropped_cols:
+                warnings.warn(
+                    f"{self.__class__.__name__}: the following columns are not "
+                    f"assigned to any transformer and will be silently dropped "
+                    f"(remainder='drop'): {dropped_cols}. "
+                    f"Categorical columns require cat_cols=True or "
+                    f"cat_cols=[...] with cat_encoder to be included.",
+                    UserWarning,
+                    stacklevel=3,
+                )
             prep = ColumnTransformer(transformers=transformers, remainder='drop')
             pipe_list.append(('prep', prep))
 
@@ -682,7 +828,8 @@ class CUPAC:
         return Pipeline(pipe_list)
 
     def __repr__(self) -> str:
-        return f'BaseModel(name="{self.name}")'
+        fitted = 'fitted' if self.pipe is not None else 'unfitted'
+        return f'{self.__class__.__name__}(name="{self.name}", {fitted})'
 
     def fit(
         self,
@@ -693,6 +840,7 @@ class CUPAC:
         excluded_categories: Optional[Dict[str, List]] = None,
         scaler: Optional[Any] = None,
         no_scale_cols: Optional[List[str]] = None,
+        fit_kwargs: Optional[Dict] = None
     ) -> 'CUPAC':
         """Fit the CUPAC pipeline on features ``X`` and target ``y``.
 
@@ -704,18 +852,28 @@ class CUPAC:
             Target metric to be adjusted.
         cat_cols : bool or list of str, optional
             Categorical columns to encode: ``True`` to auto-detect, or an
-            explicit list of column names. Requires ``cat_encoder``.
+            explicit list of column names.  When provided without
+            ``cat_encoder``, a :class:`~sklearn.preprocessing.OneHotEncoder`
+            is created automatically (``drop='first'`` for
+            :class:`~sklearn.linear_model.LinearRegression` with
+            ``fit_intercept=True``, ``drop=None`` otherwise).
         cat_encoder : callable, optional
-            Factory returning an encoder accepting a ``categories`` argument
-            (e.g. ``OneHotEncoder``). Required when ``cat_cols`` is given.
-        excluded_categories : dict, optional
+            Factory returning an encoder that accepts a ``categories`` keyword
+            argument (e.g. ``lambda cats: OneHotEncoder(categories=cats)``).
+            Overrides the default auto-encoder when provided alongside
+            ``cat_cols``.
+        excluded_categories : dict of {str: list}, optional
             Mapping ``column -> levels`` of category levels to drop from the
-            encoder's known categories.
-        scaler : estimator, optional
-            Scaler applied to numeric columns (e.g. ``StandardScaler()``). When
-            ``None`` numeric columns are passed through unscaled.
+            encoder's known categories before fitting.
+        scaler : estimator instance, optional
+            Scaler applied to numeric columns (e.g. ``StandardScaler()``).
+            When ``None`` numeric columns are passed through unscaled.
         no_scale_cols : list of str, optional
-            Numeric columns to pass through without scaling.
+            Numeric columns to pass through without scaling even when a
+            ``scaler`` is provided.
+        fit_kwargs : dict, optional
+            Extra keyword arguments forwarded to the pipeline's ``fit`` call
+            (e.g. sample weights via ``{'<step>__sample_weight': w}``).
 
         Returns
         -------
@@ -725,12 +883,21 @@ class CUPAC:
         Raises
         ------
         ValueError
-            If exactly one of ``cat_cols`` / ``cat_encoder`` is provided.
+            If ``cat_encoder`` is supplied without ``cat_cols``.
         """
         if cat_cols:
             if cat_encoder is None:
-                raise ValueError('cat_cols is not None but cat_encoder is None')
-            
+                # Auto-create a OneHotEncoder mirroring PostStratification.
+                drop = None
+                if getattr(self._model, 'fit_intercept', False):
+                    drop = 'first'
+                cat_encoder = lambda categories: OneHotEncoder(  # noqa: E731
+                    categories=categories,
+                    drop=drop,
+                    sparse_output=False,
+                    handle_unknown='ignore'
+                )
+
         if cat_encoder is not None:
             if cat_cols is None:
                 raise ValueError('cat_encoder is not None but cat_cols is None')
@@ -744,7 +911,8 @@ class CUPAC:
         X = self._to_frame(X)
 
         self.pipe = self.build_pipeline(X)
-        self.pipe.fit(X, y)
+        fit_kwargs = fit_kwargs or {}
+        self.pipe.fit(X, y, **fit_kwargs)
 
         return self
     
@@ -761,9 +929,56 @@ class CUPAC:
         X = self._to_frame(X)
         return self.pipe.predict(X)
 
-    def fit_predict(self, X: Any, y: Any) -> np.ndarray:
-        """Fit on ``(X, y)`` and return predictions for the same ``X``."""
-        self.fit(X, y)
+    def fit_predict(
+        self,
+        X: Any,
+        y: Any,
+        cat_cols: Optional[Union[bool, List[str]]] = None,
+        cat_encoder: Optional[Callable] = None,
+        excluded_categories: Optional[Dict[str, List]] = None,
+        scaler: Optional[Any] = None,
+        no_scale_cols: Optional[List[str]] = None,
+        fit_kwargs: Optional[Dict] = None
+    ) -> np.ndarray:
+        """Fit on ``(X, y)`` and return in-sample predictions for the same ``X``.
+
+        Equivalent to calling :meth:`fit` followed by :meth:`predict`.  All
+        parameters are forwarded to :meth:`fit` unchanged.
+
+        Parameters
+        ----------
+        X : array-like, Series or DataFrame
+            Pre-experiment covariates.
+        y : array-like
+            Target metric.
+        cat_cols : bool or list of str, optional
+            See :meth:`fit`.
+        cat_encoder : callable, optional
+            See :meth:`fit`.
+        excluded_categories : dict of {str: list}, optional
+            See :meth:`fit`.
+        scaler : estimator instance, optional
+            See :meth:`fit`.
+        no_scale_cols : list of str, optional
+            See :meth:`fit`.
+        fit_kwargs : dict, optional
+            See :meth:`fit`.
+
+        Returns
+        -------
+        numpy.ndarray
+            In-sample predictions, shape ``(n_samples,)``.
+        """
+        self.fit(
+            X,
+            y,
+            cat_cols=cat_cols,
+            cat_encoder=cat_encoder,
+            excluded_categories=excluded_categories,
+            scaler=scaler,
+            no_scale_cols=no_scale_cols,
+            fit_kwargs=fit_kwargs
+        )
         return self.predict(X)
 
     def predict_proba(self, X: Any) -> np.ndarray:
@@ -779,9 +994,57 @@ class CUPAC:
         X = self._to_frame(X)
         return self.pipe.predict_proba(X)
 
-    def fit_predict_proba(self, X: Any, y: Any) -> np.ndarray:
-        """Fit on ``(X, y)`` and return class probabilities for the same ``X``."""
-        self.fit(X, y)
+    def fit_predict_proba(
+        self,
+        X: Any,
+        y: Any,
+        cat_cols: Optional[Union[bool, List[str]]] = None,
+        cat_encoder: Optional[Callable] = None,
+        excluded_categories: Optional[Dict[str, List]] = None,
+        scaler: Optional[Any] = None,
+        no_scale_cols: Optional[List[str]] = None,
+        fit_kwargs: Optional[Dict] = None
+    ) -> np.ndarray:
+        """Fit on ``(X, y)`` and return in-sample class probabilities.
+
+        Equivalent to calling :meth:`fit` followed by :meth:`predict_proba`.
+        Intended for classifier models (e.g. ``model='log'``).  All parameters
+        are forwarded to :meth:`fit` unchanged.
+
+        Parameters
+        ----------
+        X : array-like, Series or DataFrame
+            Pre-experiment covariates.
+        y : array-like
+            Binary target metric.
+        cat_cols : bool or list of str, optional
+            See :meth:`fit`.
+        cat_encoder : callable, optional
+            See :meth:`fit`.
+        excluded_categories : dict of {str: list}, optional
+            See :meth:`fit`.
+        scaler : estimator instance, optional
+            See :meth:`fit`.
+        no_scale_cols : list of str, optional
+            See :meth:`fit`.
+        fit_kwargs : dict, optional
+            See :meth:`fit`.
+
+        Returns
+        -------
+        numpy.ndarray
+            Class-probability matrix, shape ``(n_samples, n_classes)``.
+        """
+        self.fit(
+            X,
+            y,
+            cat_cols=cat_cols,
+            cat_encoder=cat_encoder,
+            excluded_categories=excluded_categories,
+            scaler=scaler,
+            no_scale_cols=no_scale_cols,
+            fit_kwargs=fit_kwargs
+        )
         return self.predict_proba(X)
 
     def score(
@@ -793,28 +1056,33 @@ class CUPAC:
     ) -> Dict[str, float]:
         """Report variance-reduction diagnostics for the fitted predictor.
 
-        Computes the residual metric (``y`` minus the prediction, or minus the
-        positive-class probability when ``predict_proba`` is ``True``) and
-        summarizes how much its variance shrank relative to the raw metric.
+        Computes the residual metric ``y - ŷ`` (or ``y - P(y=1|X)`` when
+        ``predict_proba=True``) and summarises how much variance was removed
+        relative to the raw metric.
 
         Parameters
         ----------
-        X : array-like
-            Features to evaluate on.
+        X : array-like, Series or DataFrame
+            Features to evaluate on (same format as used in :meth:`fit`).
         y : array-like
             Observed target values.
-        plot : bool, default True
+        plot : bool, default ``True``
             If ``True``, draw a bar chart comparing raw vs. adjusted variance.
-        predict_proba : bool, default False
+        predict_proba : bool, default ``False``
             Use predicted positive-class probabilities instead of point
-            predictions when forming the residual.
+            predictions when forming the residual.  Requires a classifier
+            model.
 
         Returns
         -------
         dict
-            Keys ``var_reduction`` (fraction of variance removed),
-            ``predictor_r2`` (regression R^2, ``nan`` for classifiers),
-            ``resid_std`` (std of the adjusted metric) and ``theta``.
+            ``var_reduction``
+                Fraction of variance removed: ``1 - Var(residual) / Var(y)``.
+            ``resid_std``
+                Standard deviation of the adjusted (residual) metric.
+            ``theta``
+                OLS slope coefficient (meaningful for :class:`CUPED` only;
+                ``nan`` for all other models).
         """
         y = np.asarray(y, dtype=float)
         if predict_proba:
@@ -823,80 +1091,188 @@ class CUPAC:
             adj = y - self.predict(X)
         var_y, var_adj = y.var(), adj.var()
         vr = float(1 - var_adj / var_y) if var_y > 0 else 0.0
-        reg = self.pipeline.named_steps['reg']
-        r2 = (float('nan') if is_classifier(reg)
-              else float(self.pipeline.score(self._to_frame(X), y)))
         if plot:
             plot_comparison_bars(
-                baseline=var_y, values=[var_adj], labels=['CUPAC'],
-                title='CUPAC Performance', ylabel='Variance', figsize=(5, 3.5),
+                baseline=var_y, values=[var_adj], labels=[self.name],
+                title=f'{self.name} Performance', ylabel='Variance', figsize=(5, 3.5),
             )
+        theta = float(getattr(self, 'theta_', float('nan')))
         return {
             'var_reduction': vr,
-            'predictor_r2': r2,
             'resid_std': float(adj.std()),
-            'theta': float(self.theta_),
+            'theta': theta,
         }
     
 class CUPED(CUPAC):
     """CUPED variance reduction with a single pre-experiment covariate.
 
-    A special case of :class:`CUPAC` that fits an OLS regression on exactly one
-    covariate. The adjusted metric ``y - theta * X`` reduces variance while
-    keeping the treatment effect unbiased.
+    A special case of :class:`CUPAC` that fits an OLS regression on exactly
+    one covariate and returns the residuals ``y - θ·X``.  The adjustment
+    reduces variance while keeping the treatment-effect estimate unbiased.
 
     Parameters
     ----------
     name : str, optional
-        Name of the regression step. Defaults to ``'CUPED'``.
+        Name of the regression step in the pipeline.  Defaults to
+        ``'CUPED'``.
+
+    Attributes
+    ----------
+    theta_ : float
+        Fitted OLS slope coefficient.  Available after :meth:`fit`.
+
+    Notes
+    -----
+    Categorical covariates and scaling are intentionally unsupported —
+    CUPED is defined for a single *numeric* pre-experiment variable.
+    For multi-covariate or categorical adjustments use :class:`CUPAC` or
+    :class:`PostStratification` directly.
     """
 
     def __init__(self, name: Optional[str] = None) -> None:
         name = name or 'CUPED'
         super().__init__('ols', name)
 
-    def _check_X(self, X: np.ndarray) -> np.ndarray:
-        """Validate that ``X`` is (or can be reshaped to) a single column.
+    def _check_X(self, X: Any) -> np.ndarray:
+        """Coerce ``X`` to a 2-D single-column array and validate its shape.
+
+        Accepts 1-D arrays, :class:`pandas.Series`, or single-column
+        DataFrames / 2-D arrays.
+
+        Parameters
+        ----------
+        X : array-like or Series
+            The covariate to validate.
+
+        Returns
+        -------
+        numpy.ndarray
+            Shape ``(n_samples, 1)``.
+
+        Raises
+        ------
+        ValueError
+            If ``X`` has more than one column after reshaping.
+        """
+        if X.ndim == 1:
+            if isinstance(X, pd.Series):
+                X = X.values
+            X = X.reshape(-1, 1)
+        if X.shape[1] > 1:
+            raise ValueError('X should be one-dimensional')
+        return X
+
+    def fit(self, X: Any, y: Any, **kwargs) -> 'CUPED':
+        """Fit the OLS predictor on a single covariate ``X`` and target ``y``.
+
+        Parameters
+        ----------
+        X : array-like or Series
+            Single pre-experiment covariate, shape ``(n_samples,)`` or
+            ``(n_samples, 1)``.
+        y : array-like
+            Target metric to adjust, shape ``(n_samples,)``.
+        **kwargs
+            Accepted for API compatibility with :meth:`CUPAC.fit_predict` but
+            ignored — CUPED always uses plain OLS on a single numeric
+            covariate.
+
+        Returns
+        -------
+        CUPED
+            The fitted instance (``self``).
 
         Raises
         ------
         ValueError
             If ``X`` has more than one column.
         """
-        if X.ndim == 1:
-            X = X.reshape(-1, 1)
-        if X.shape[1] > 1:
-            raise ValueError('X should be one-dimensional')
-        return X
-
-    def fit(self, X: np.ndarray, y: Any) -> 'CUPED':
-        """Fit the OLS predictor on a single covariate ``X`` and target ``y``.
-
-        Returns
-        -------
-        CUPED
-            The fitted instance (``self``).
-        """
         X = self._check_X(X)
-        return super().fit(X, y)
+        result = super().fit(X, y)
+        # Extract the OLS theta coefficient so score() can report it.
+        self.theta_ = float(self.pipe.named_steps[self.name].coef_[0])
+        return result
 
-    def cuped(self, X: np.ndarray, y: Any, fit: bool = True) -> np.ndarray:
-        """Return the CUPED-adjusted metric ``y - prediction(X)``.
+    def predict(self, X: Any) -> np.ndarray:
+        """Predict ``ŷ = θ·X`` using the fitted OLS model.
+
+        Normalises ``X`` through :meth:`_check_X` so Series, 1-D arrays and
+        single-column DataFrames are handled consistently with :meth:`fit`.
 
         Parameters
         ----------
-        X : numpy.ndarray
+        X : array-like or Series
+            Single pre-experiment covariate.
+
+        Returns
+        -------
+        numpy.ndarray
+            Predicted values, shape ``(n_samples,)``.
+        """
+        return super().predict(self._check_X(X))
+
+    def predict_proba(self, X: Any) -> np.ndarray:
+        """Not meaningful for CUPED (OLS); kept for API compatibility.
+
+        Parameters
+        ----------
+        X : array-like or Series
+            Single pre-experiment covariate.
+
+        Returns
+        -------
+        numpy.ndarray
+            Class-probability matrix forwarded from the parent pipeline.
+        """
+        return super().predict_proba(self._check_X(X))
+
+    def score(
+        self,
+        X: Any,
+        y: Any,
+        plot: bool = True,
+        predict_proba: bool = False,
+    ) -> dict:
+        """Report variance-reduction diagnostics, normalising ``X`` first.
+
+        Delegates to :meth:`CUPAC.score` after passing ``X`` through
+        :meth:`_check_X`.
+
+        Parameters
+        ----------
+        X : array-like or Series
+            Single pre-experiment covariate.
+        y : array-like
+            Observed target values.
+        plot : bool, default ``True``
+            Draw a variance-comparison bar chart.
+        predict_proba : bool, default ``False``
+            Use class probabilities instead of point predictions.
+
+        Returns
+        -------
+        dict
+            See :meth:`CUPAC.score` for key descriptions.
+        """
+        return super().score(self._check_X(X), y, plot=plot, predict_proba=predict_proba)
+
+    def cuped(self, X: Any, y: Any, fit: bool = True) -> np.ndarray:
+        """Return the CUPED-adjusted metric ``y - θ·X``.
+
+        Parameters
+        ----------
+        X : array-like or Series
             Single pre-experiment covariate.
         y : array-like
             Target metric to adjust.
-        fit : bool, default True
+        fit : bool, default ``True``
             If ``True``, (re)fit the model on ``(X, y)`` before adjusting;
             if ``False``, use the already-fitted model.
 
         Returns
         -------
         numpy.ndarray
-            The variance-reduced (adjusted) metric.
+            The variance-reduced (adjusted) metric, shape ``(n_samples,)``.
         """
         if fit:
             self.fit(X, y)
@@ -904,17 +1280,104 @@ class CUPED(CUPAC):
 
 
 class PostStratification(CUPAC):
-    """Post-stratification adjustment via OLS on stratum covariates.
+    """Post-stratification adjustment via OLS on stratum indicator covariates.
 
-    A :class:`CUPAC` variant using an OLS regressor to remove between-strata
-    variance from the metric after the experiment has run.
+    A :class:`CUPAC` variant that removes between-strata variance from the
+    metric after the experiment has run.  Categorical and string stratum
+    labels are automatically one-hot encoded, so the raw output of
+    ``pd.qcut(..., labels=[...])`` can be passed in directly without any
+    manual preprocessing.
 
     Parameters
     ----------
     name : str, optional
-        Name of the regression step. Defaults to ``'PostStratification'``.
+        Name of the regression step in the pipeline.  Defaults to
+        ``'PostStratification'``.
+    fit_intercept : bool, default ``True``
+        Whether to fit an intercept in the underlying
+        :class:`~sklearn.linear_model.LinearRegression`.  When ``True``
+        one dummy column is dropped automatically (``drop='first'``) to
+        avoid multicollinearity.
     """
 
-    def __init__(self, name: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        name: Optional[str] = None,
+        fit_intercept: bool = True
+    ) -> None:
         name = name or 'PostStratification'
-        super().__init__('ols', name)
+        model = LinearRegression(fit_intercept=fit_intercept, copy_X=False)
+        super().__init__(model, name)
+
+    def fit(
+        self,
+        X: Any,
+        y: Any,
+        cat_cols: Optional[Union[bool, List[str]]] = None,
+        cat_encoder: Optional[Callable] = None,
+        excluded_categories: Optional[Dict[str, List]] = None,
+        scaler: Optional[Any] = None,
+        no_scale_cols: Optional[List[str]] = None,
+        fit_kwargs: Optional[Dict] = None
+    ) -> 'PostStratification':
+        """Fit post-stratification OLS, auto-encoding categorical/string columns.
+
+        If ``X`` contains object, string, or
+        :class:`~pandas.CategoricalDtype` columns **and** ``cat_encoder`` is
+        ``None``, a :class:`~sklearn.preprocessing.OneHotEncoder` is created
+        automatically (``drop='first'`` when the model uses an intercept) so
+        that string stratum labels such as ``'decile_1'`` work out of the box
+        without any manual preprocessing.
+
+        Parameters
+        ----------
+        X : array-like, Series or DataFrame
+            Stratum covariates (numeric or categorical/string).
+        y : array-like
+            Target metric to adjust.
+        cat_cols : bool or list of str, optional
+            Categorical columns to encode: ``True`` to auto-detect all
+            object/string/categorical columns, or an explicit list of names.
+            Defaults to ``True`` when ``X`` contains such columns.
+        cat_encoder : callable, optional
+            Custom encoder factory accepting a ``categories`` keyword
+            argument.  Overrides the default OHE when provided.
+        excluded_categories : dict of {str: list}, optional
+            Category levels to exclude per column before encoding.
+        scaler : estimator instance, optional
+            Scaler for numeric columns; ``None`` means passthrough.
+        no_scale_cols : list of str, optional
+            Numeric columns to skip scaling.
+
+        Returns
+        -------
+        PostStratification
+            The fitted instance (``self``).
+        """
+        X_frame = self._to_frame(X)
+        has_cat = any(
+            pd.api.types.is_object_dtype(X_frame[c])
+            or isinstance(X_frame[c].dtype, pd.CategoricalDtype)
+            or pd.api.types.is_string_dtype(X_frame[c])
+            for c in X_frame.columns
+        )
+        if has_cat and cat_encoder is None:
+            drop = None
+            if getattr(self._model, 'fit_intercept', False):
+                drop = 'first'
+            cat_cols = cat_cols if cat_cols is not None else True
+            cat_encoder = lambda categories: OneHotEncoder(
+                categories=categories,
+                drop=drop,
+                sparse_output=False,
+                handle_unknown='ignore'
+            )
+        return super().fit(
+            X, y,
+            cat_cols=cat_cols,
+            cat_encoder=cat_encoder,
+            excluded_categories=excluded_categories,
+            scaler=scaler,
+            no_scale_cols=no_scale_cols,
+            fit_kwargs=fit_kwargs
+        )
