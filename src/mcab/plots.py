@@ -379,8 +379,6 @@ def plot_power_curve_data(
     ax[0].set_xlabel('Effect size', fontsize=20)
     ax[0].set_ylabel('Power', fontsize=20)
     ax[0].set_title('Power curve', fontsize=24, fontweight="bold")
-    if target_power is None:
-        target_power = 0.8
     ax[0].axhline(y=target_power, color='r', linestyle='--', linewidth=3.5)
     ax[0].grid(True, alpha=0.3)
     ax[0].tick_params(labelsize=18)
@@ -597,6 +595,7 @@ def plot_aa_benchmark(
     ax1.grid(axis='x', alpha=0.3)
     # Leave room on the right so the labels never overflow the axes.
     ax1.set_xlim(0, ax1_xmax * 1.25 + ft_offset)
+    ax1.invert_yaxis()
 
     # Plot 2: Mean p-value (horizontal bars)
     mp_vals = np.array([s['mean_p'] for s in all_stats])
@@ -624,6 +623,7 @@ def plot_aa_benchmark(
     ax2.grid(axis='x', alpha=0.3)
     # Leave room on the right so the labels never overflow the axes.
     ax2.set_xlim(0, ax2_xmax * 1.2 + mp_offset)
+    ax2.invert_yaxis()
 
     # Plot 3: Convergence (line plot)
     for i, stats_dict in enumerate(all_stats):
@@ -744,6 +744,7 @@ def plot_ab_benchmark(
         ax.grid(axis='x', alpha=0.3)
         # Leave room on the right so the labels never overflow the axes.
         ax.set_xlim(0, bp_xmax * 1.2 + bp_offset)
+        ax.invert_yaxis()
     
     # Plot 2: Convergence - only if bar_effect
     if bar_effect and all_bar_stats:
@@ -852,6 +853,7 @@ def plot_multi_test_fwer(
     ax.set_title(f'FWER Comparison ({n_designers} tests)', fontsize=14, fontweight='bold')
     ax.legend(loc='best', fontsize=10)
     ax.grid(axis='x', alpha=0.3)
+    ax.invert_yaxis()
     
     # Plot 2: Convergence
     ax = axes[1]
@@ -886,69 +888,101 @@ def plot_multi_test_fwer(
 def plot_multi_test_power(
     results: dict,
     n_designers: int,
+    power_curve_effects=None,
+    beta: float = 0.20,
     figsize=None
 ):
-    """
-    Visualization of power metrics for multiple testing.
-    
+    """Visualize power metrics for multiple testing corrections.
+
+    Draws a row of three horizontal-bar charts (Average Power, Any-Pair Power,
+    All-Pairs Power) comparing correction methods at the fixed effect sizes
+    supplied to :meth:`~BenchMarker.multi_test_power`.
+
+    When ``power_curve_effects`` is provided a second row of three line plots
+    shows how each metric evolves as the effect size increases.
+
     Parameters
     ----------
     results : dict
-        Results for each correction method.
+        Output of :meth:`~BenchMarker.multi_test_power`.  Each value must
+        contain ``'avg_power'``, ``'any_pair_power'``, ``'all_pairs_power'``
+        scalars, and optionally a ``'power_curve'`` sub-dict with lists of
+        the same metrics (one entry per point in ``power_curve_effects``).
     n_designers : int
-        Number of designers (tests).
+        Number of designers / simultaneous tests.
+    power_curve_effects : array-like, optional
+        X-axis values for the power-curve plots.  When ``None`` only the bar
+        charts are drawn.
+    beta : float, default 0.20
+        Target Type-II error rate; ``1 - beta`` is drawn as a reference line
+        on power-curve plots.
     figsize : tuple, optional
-        Figure size (width, height). Default is (30, 6).
+        Figure size ``(width, height)``.  Defaults to ``(30, 6)`` for bar-only
+        output and ``(30, 12)`` when power curves are included.
     """
+    has_curves = (
+        power_curve_effects is not None
+        and any('power_curve' in v for v in results.values())
+    )
+    n_rows = 2 if has_curves else 1
     if figsize is None:
-        figsize = (30, 6)
-    fig, axes = plt.subplots(1, 3, figsize=figsize)
-    
+        figsize = (30, 6 * n_rows)
+
+    fig, axes = plt.subplots(n_rows, 3, figsize=figsize)
+    if n_rows == 1:
+        axes = axes[np.newaxis, :]   # shape (1, 3) for uniform indexing
+
     methods_list = list(results.keys())
     y_pos = np.arange(len(methods_list))
-    
-    # Plot 1: Average power
-    ax = axes[0]
-    for i, method in enumerate(methods_list):
-        res = results[method]
-        ax.barh(y_pos[i], res['avg_power'], alpha=0.7, label=method)
-        ax.text(res['avg_power'], y_pos[i], f" {res['avg_power']:.4f}",
-               va='center', fontsize=10)
-    
-    ax.set_yticks(y_pos)
-    ax.set_yticklabels(methods_list)
-    ax.set_xlabel('Average Power', fontsize=12)
-    ax.set_title(f'Average Power (mean: rejections / {n_designers})', fontsize=14, fontweight='bold')
-    ax.grid(axis='x', alpha=0.3)
-    
-    # Plot 2: Any-Pair Power
-    ax = axes[1]
-    for i, method in enumerate(methods_list):
-        res = results[method]
-        ax.barh(y_pos[i], res['any_pair_power'], alpha=0.7, label=method)
-        ax.text(res['any_pair_power'], y_pos[i], f" {res['any_pair_power']:.4f}",
-               va='center', fontsize=10)
-    
-    ax.set_yticks(y_pos)
-    ax.set_yticklabels(methods_list)
-    ax.set_xlabel('Any-Pair Power', fontsize=12)
-    ax.set_title('Any-Pair Power (≥1 rejection)', fontsize=14, fontweight='bold')
-    ax.grid(axis='x', alpha=0.3)
-    
-    # Plot 3: All-Pairs Power
-    ax = axes[2]
-    for i, method in enumerate(methods_list):
-        res = results[method]
-        ax.barh(y_pos[i], res['all_pairs_power'], alpha=0.7, label=method)
-        ax.text(res['all_pairs_power'], y_pos[i], f" {res['all_pairs_power']:.4f}",
-               va='center', fontsize=10)
-    
-    ax.set_yticks(y_pos)
-    ax.set_yticklabels(methods_list)
-    ax.set_xlabel('All-Pairs Power', fontsize=12)
-    ax.set_title(f'All-Pairs Power (all {n_designers} rejections)', fontsize=14, fontweight='bold')
-    ax.grid(axis='x', alpha=0.3)
-    
+    required_power = 1.0 - beta
+
+    # ── Row 0: bar charts ────────────────────────────────────────────────────
+    _bar_specs = [
+        ('avg_power',       f'Average Power (mean: rejections / {n_designers})', 'Average Power'),
+        ('any_pair_power',  'Any-Pair Power (≥1 rejection)',                      'Any-Pair Power'),
+        ('all_pairs_power', f'All-Pairs Power (all {n_designers} rejections)',    'All-Pairs Power'),
+    ]
+    for col, (key, title, xlabel) in enumerate(_bar_specs):
+        ax = axes[0, col]
+        for i, method in enumerate(methods_list):
+            val = results[method][key]
+            ax.barh(y_pos[i], val, alpha=0.7, label=method)
+            ax.text(val, y_pos[i], f'  {val:.4f}', va='center', fontsize=10)
+        ax.axvline(x=required_power, color='red', linestyle='--', linewidth=1.5,
+                   label=f'1-β = {required_power:.2f}')
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(methods_list)
+        ax.set_xlabel(xlabel, fontsize=12)
+        ax.set_title(title, fontsize=14, fontweight='bold')
+        ax.grid(axis='x', alpha=0.3)
+        ax.invert_yaxis()
+        ax.set_xlim(0, 1.05)
+
+    # ── Row 1: power curves ──────────────────────────────────────────────────
+    if has_curves:
+        x = list(power_curve_effects)
+        _curve_specs = [
+            ('avg_power',       'Average Power',  'Avg Power'),
+            ('any_pair_power',  'Any-Pair Power', 'Any-Pair Power'),
+            ('all_pairs_power', 'All-Pairs Power','All-Pairs Power'),
+        ]
+        for col, (key, title, ylabel) in enumerate(_curve_specs):
+            ax = axes[1, col]
+            for method in methods_list:
+                pc = results[method].get('power_curve')
+                if pc is None:
+                    continue
+                ax.plot(x, pc[key], marker='o', markersize=4, linewidth=2,
+                        alpha=0.85, label=method)
+            ax.axhline(y=required_power, color='red', linestyle='--',
+                       linewidth=1.5, label=f'1-β = {required_power:.2f}')
+            ax.set_xlabel('Effect size', fontsize=12)
+            ax.set_ylabel(ylabel, fontsize=12)
+            ax.set_title(f'{title} vs Effect Size', fontsize=14, fontweight='bold')
+            ax.legend(fontsize=9, loc='lower right')
+            ax.grid(True, alpha=0.3)
+            ax.set_ylim(0, 1.05)
+
     plt.tight_layout()
     plt.show()
 
