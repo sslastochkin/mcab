@@ -384,6 +384,61 @@ class CustomEffectSizer(EffectSizer):
         ratio: Whether data is in ratio format
     """
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # custom_data and raw_data must both be provided.
+        if self.custom_data is None:
+            raise ValueError(
+                "CustomEffectSizer: custom_data must not be None."
+            )
+        if self.raw_data is None:
+            raise ValueError(
+                "CustomEffectSizer: raw_data must not be None."
+            )
+
+        # Shapes of custom_data and raw_data must match.
+        def _shape(x):
+            if isinstance(x, tuple):
+                return x[0].shape
+            return np.asarray(x).shape
+
+        cd_shape = _shape(self.custom_data)
+        rd_shape = _shape(self.raw_data)
+        if cd_shape != rd_shape:
+            raise ValueError(
+                f"CustomEffectSizer: custom_data and raw_data must have the same shape, "
+                f"but got custom_data.shape={cd_shape} and raw_data.shape={rd_shape}."
+            )
+
+        # For iid proportion data (binary 0/1), custom_data must contain
+        # only 0s and 1s — otherwise the simulations will silently produce
+        # incorrect p-values (e.g., a proportion test on non-binary data).
+        if self.proportion and not self.ratio_call:
+            data = np.asarray(self.custom_data)
+            if not np.all((data == 0) | (data == 1)):
+                raise ValueError(
+                    "CustomEffectSizer: proportion=True and ratio=False requires "
+                    "custom_data to contain only 0s and 1s, "
+                    f"but got unique values: {np.unique(data)}"
+                )
+
+        # For ratio proportion data (CTR-like), numerator must not exceed
+        # denominator in either raw_data or custom_data.
+        if self.proportion and self.ratio_call:
+            cd_num, cd_denom = self.custom_data
+            if not np.all(cd_num <= cd_denom):
+                raise ValueError(
+                    "CustomEffectSizer: proportion=True and ratio metric requires "
+                    "custom_data numerator <= denominator for all observations."
+                )
+            rd_num, rd_denom = self.raw_data
+            if not np.all(rd_num <= rd_denom):
+                raise ValueError(
+                    "CustomEffectSizer: proportion=True and ratio metric requires "
+                    "raw_data numerator <= denominator for all observations."
+                )
+
     def __call__(
         self,
         idx: Union[int, slice, NDArray],
@@ -464,36 +519,40 @@ class FunctionEffectSizer(EffectSizer):
 
     def __call__(
         self,
-        first_argument: Tuple[Any, Any, NDArray, NDArray, NDArray],
+        first_argument: Tuple[Any, Any, Any, NDArray, NDArray, NDArray],
         effect: Any = True,
         seed: Optional[int] = None
     ) -> Union[NDArray, Tuple[NDArray, NDArray]]:
         """Apply the user function to the test sample.
 
         Args:
-            first_argument: Tuple ``(test, control, test_idx, control_idx, idx)``.
+            first_argument: Tuple
+                ``(test, control, test_control, test_idx, control_idx, test_control_idx)``.
                 ``test`` and ``control`` are the raw test/control samples
                 (arrays for iid metrics or ``(num, denom)`` tuples for ratio
-                metrics), ``test_idx``/``control_idx`` are the per-group
-                positions and ``idx`` is the full shuffled index. All of them
-                are passed to ``func`` as read-only views.
-            effect: If truthy, return
-                ``func(test, control, test_idx, control_idx, idx, seed)``;
-                otherwise return the original (untouched) test sample.
+                metrics). ``test_control`` is the full dataset (test + control
+                combined, same structure as test/control). ``test_idx`` /
+                ``control_idx`` are the per-group index arrays and
+                ``test_control_idx`` is the full shuffled index array. All of
+                them are passed to ``func`` as read-only views.
+            effect: If truthy, returns
+                ``func(test, control, test_control, test_idx, control_idx, test_control_idx, seed)``;
+                otherwise returns the original (untouched) test sample.
             seed: Forwarded to ``func`` for reproducibility.
 
         Returns:
             Test sample with the effect applied, or the original test sample.
         """
-        test, control, test_idx, control_idx, idx = first_argument
+        test, control, test_control, test_idx, control_idx, test_control_idx = first_argument
         if not effect:
             return test
         return self.func(
             test=self._as_readonly(test),
             control=self._as_readonly(control),
+            test_control=self._as_readonly(test_control),
             test_idx=self._as_readonly(test_idx),
             control_idx=self._as_readonly(control_idx),
-            idx=self._as_readonly(idx),
+            test_control_idx=self._as_readonly(test_control_idx),
             seed=seed
         )
 
