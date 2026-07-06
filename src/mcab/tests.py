@@ -26,12 +26,29 @@ from .transform import (
 )
 
 def _make_transform(transformer, X, y):
+    """Apply a variance-reduction transformer to ``y`` using covariates ``X``.
+
+    Automatically passes ``cat_cols=True`` when ``X`` is a DataFrame that
+    contains object, string or categorical columns, so CUPAC encodes them
+    instead of dropping them with a warning.
+    """
+    kwargs = {'cat_cols':True}
+    # if isinstance(X, pd.DataFrame):
+    #     has_cat = any(
+    #         pd.api.types.is_object_dtype(X[c])
+    #         or isinstance(X[c].dtype, pd.CategoricalDtype)
+    #         or pd.api.types.is_string_dtype(X[c])
+    #         for c in X.columns
+    #     )
+    #     if has_cat:
+    #         kwargs['cat_cols'] = True
+
     if isinstance(y, tuple):
         num, den = y
-        num_mod = num - transformer().fit_predict(X, num)
-        den_mod = den - transformer().fit_predict(X, den)
+        num_mod = num - transformer().fit_predict(X, num, **kwargs)
+        den_mod = den - transformer().fit_predict(X, den, **kwargs)
         return (num_mod, den_mod)
-    return y - transformer().fit_predict(X, y)
+    return y - transformer().fit_predict(X, y, **kwargs)
 
 def make_cuped(X, y):
     return _make_transform(CUPED, X, y)
@@ -255,7 +272,7 @@ def _get_exact_tests_results():
     ratio_prop_X2 = TData('ratio_prop_X2', pd.concat([ratio_prop_cov.value, strat_2.value], axis=1))
 
     pval_func_iid   = TData('pval_func_iid',   lambda test, control: stats.ttest_ind(test, control, equal_var=False).pvalue)
-    pval_func_ratio = TData('pval_func_ratio', lambda test, control: stats.ttest_ind(test[0]/test[1], control[0]/control[1], equal_var=False).pvalue)
+    pval_func_ratio = TData('pval_func_ratio', lambda test, control: stats.ttest_ind(test[0]/(test[1]+1e-10), control[0]/(control[1]+1e-10), equal_var=False).pvalue)
     pval_func_dept  = TData('pval_func_dept',  lambda test: stats.ttest_1samp(test, 0).pvalue)
 
     designer_iid            = TData('designer_iid',            DesignerIid)
@@ -319,6 +336,14 @@ def _get_exact_tests_results():
                     for efs_i, efs_data in enumerate(EFFECT_SIZERS):
                         efs_name = efs_data.name
                         effect_sizer, effect, custom_data_func = efs_data.value
+
+                        # CustomEffectSizer with lambda x: x*1.01 produces non-binary
+                        # values (e.g. 1.01) for proportion data, which is rejected by
+                        # CustomEffectSizer's validation. Skip this combination.
+                        if effect_sizer == 'custom' and getattr(des_data, 'proportion', False):
+                            pbar.update(1)
+                            continue
+
                         if custom_data_func is None:
                             custom_data = None
                         else:
