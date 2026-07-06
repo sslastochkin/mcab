@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mcab"
-dynamic = ["version"]   # ← убираем version = "0.1.1", версия берётся из git-тега
+dynamic = ["version"]
 description = "Monte Carlo A/B Testing Library - comprehensive tools for A/B test design and analysis"
 readme = "docs/README.md"
 authors = [
