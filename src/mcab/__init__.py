@@ -105,6 +105,7 @@ from .mstats import (
     delta_method_pvalue
 )
 
+# Transformers
 from .transform import (
     Linearizer,
     CUPAC,
