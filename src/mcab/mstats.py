@@ -1524,13 +1524,14 @@ def benjamini_krieger_yekutieli(
     order = np.argsort(pvalues)
     sorted_p = pvalues[order]
     
-    # Find number of rejections in stage 1
+    # Find number of rejections in stage 1.
+    # BH is a step-UP procedure: we need the LARGEST rank k such that
+    # p(k) <= k * alpha_1 / m.  Stopping at the first failure (step-DOWN)
+    # would undercount rejections when a gap exists in the p-value sequence.
     r = 0
     for i in range(m):
         if sorted_p[i] <= (i + 1) * alpha_1 / m:
             r = i + 1
-        else:
-            break
     
     # Stage 2: Adaptive adjustment
     if r == 0:
