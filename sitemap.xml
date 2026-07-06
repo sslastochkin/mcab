@@ -2,14 +2,22 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://sslastochkin.github.io/mcab/</loc>
-         <lastmod>2026-07-05</lastmod>
+         <lastmod>2026-07-06</lastmod>
     </url>
     <url>
          <loc>https://sslastochkin.github.io/mcab/tutorial/01_first_steps/</loc>
-         <lastmod>2026-07-05</lastmod>
+         <lastmod>2026-07-06</lastmod>
     </url>
     <url>
          <loc>https://sslastochkin.github.io/mcab/tutorial/02_data_and_effects/</loc>
-         <lastmod>2026-07-05</lastmod>
+         <lastmod>2026-07-06</lastmod>
+    </url>
+    <url>
+         <loc>https://sslastochkin.github.io/mcab/tutorial/03_variance_reduction/</loc>
+         <lastmod>2026-07-06</lastmod>
+    </url>
+    <url>
+         <loc>https://sslastochkin.github.io/mcab/tutorial/04_multiple_corrections/</loc>
+         <lastmod>2026-07-06</lastmod>
     </url>
 </urlset>
