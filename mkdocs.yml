@@ -7,6 +7,8 @@ nav:
   - 'Tutorial': 
     - 'First steps': 'tutorial/01_first_steps.ipynb'
     - 'Data and Effects': 'tutorial/02_data_and_effects.ipynb'
+    - 'Variance Reduction': 'tutorial/03_variance_reduction.ipynb'
+    - 'Multiple Corrections': 'tutorial/04_multiple_corrections.ipynb'
 
 theme:
   name: material
