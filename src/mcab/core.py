@@ -429,6 +429,7 @@ class _DesignerBase:
         verbose: bool = True,
         plot: bool = True,
         annotate_curve: bool = True,
+        target_power: Optional[float] = None,
         figsize: Optional[tuple] = None
     ):
         """
@@ -436,6 +437,9 @@ class _DesignerBase:
         
         Parameters
         ----------
+        target_power : float, optional
+            Target power for the horizontal reference line on the plot.
+            If None, defaults to ``1 - self.beta``.
         figsize : tuple, optional
             Figure size (width, height) for the plot.
         """
@@ -478,8 +482,10 @@ class _DesignerBase:
                     print(f' - [{curr_i}/{elems_cnt}] {effect:,.4f}: {power*100:.2f}% {func_name}')
             power_curves.append((func_name, power_curve_fn))
             power_cummeans.append(cummeans_fn)
+        if target_power is None:
+            target_power = 1 - self.beta
         if plot:
-            plot_power_curve_data(effects_list, power_curves, power_cummeans, target_power=None, annotate=annotate_curve, figsize=figsize)
+            plot_power_curve_data(effects_list, power_curves, power_cummeans, target_power=target_power, annotate=annotate_curve, figsize=figsize)
         return power_curves
     
     def find_mde(
@@ -510,7 +516,7 @@ class _DesignerBase:
             pval_func = self.pval_func
         
         if target_power is None:
-            target_power = 0.8
+            target_power = 1 - self.beta
 
         n_controls = self.validated_n_controls(control_size)
 
@@ -695,7 +701,11 @@ class AaDataIid:
             warnings.warn('Given proportion=False but target between 0 and 1. Are you shure?')
 
         if proportion:
-            assert self.data_raw.min() >= 0 and self.data_raw.max() <= 1, 'Given proportion=True but target not between 0 and 1.'
+            if not np.all((self.data_raw == 0) | (self.data_raw == 1)):
+                raise ValueError(
+                    'Given proportion=True but data contains values other than 0 and 1. '
+                    f'Unique values found: {np.unique(self.data_raw)}'
+                )
     
     def __repr__(self):
         n = len(self.data_raw)
@@ -765,16 +775,17 @@ class AaDataRatio:
 
         self.transformer = transformer
         if covariates is not None:
+            # Accept Series and 1-D arrays by reshaping to (n, 1) / single-column
+            # DataFrame so that CUPED-style transformers that take a single
+            # pre-experiment covariate work without the user having to reshape.
+            if isinstance(covariates, pd.Series):
+                covariates = covariates.to_frame()
+            elif isinstance(covariates, np.ndarray) and covariates.ndim == 1:
+                covariates = covariates.reshape(-1, 1)
             assert isinstance(covariates, (np.ndarray, pd.DataFrame)), \
-                'covariates must be a 2-D ndarray or a DataFrame (pd.Series is not supported).'
-            # Reject a 1-D vector: the ratio transformer is expected to consume a
-            # 2-D covariate matrix (e.g. separate columns feeding numerator and
-            # denominator adjustments).
+                'covariates must be an ndarray, DataFrame, or Series.'
             assert covariates.ndim == 2, \
-                'covariates must be 2-dimensional (got a 1-D vector).'
-            # Single covariate object, kept in the user's original type
-            # (ndarray / DataFrame) so the custom transformer receives exactly
-            # what it expects.
+                'covariates must be 2-dimensional after coercion.'
             assert covariates.shape[0] == numerator.shape[0], \
                 'covariates must have the same length as data'
             self.covariates = covariates
@@ -802,6 +813,7 @@ class DesignerIid(_DesignerBase):
         self,
         target: Union[AaDataIid, pd.Series, np.ndarray],
         alpha: float = 0.05,
+        beta: float = 0.20,
         seed: int = 42,
         name: Optional[str] = None,
         pval_func: Optional[Callable] = None,
@@ -820,6 +832,7 @@ class DesignerIid(_DesignerBase):
         
         self.target = target
         self.alpha = alpha
+        self.beta = beta
         self.rng = np.random.default_rng(seed)
         self.name = name
         self.pval_func = pval_func
@@ -908,7 +921,7 @@ class DesignerIid(_DesignerBase):
         if isinstance(self.add_effect, CustomEffectSizer):
             first_argument_test = test_idx
         elif isinstance(self.add_effect, FunctionEffectSizer):
-            first_argument_test = (data[test_idx], control, test_idx, control_idx, idx)
+            first_argument_test = (data[test_idx], control, data, test_idx, control_idx, idx)
         else:
             first_argument_test = data[test_idx]
 
@@ -998,11 +1011,12 @@ class DesignerRatio(_DesignerBase):
         self,
         target: Union[AaDataRatio, Tuple, List],
         alpha: float = 0.05,
+        beta: float = 0.20,
         seed: int = 42,
         name: Optional[str] = None,
         pval_func: Optional[Callable] = None,
         effect_sizer: Literal['percent', 'const', 'custom', 'function'] = 'percent',
-        ratio: Literal['int', 'float'] = 'int',
+        ratio: Literal['int', 'float'] = 'float',
         custom_data: NDArray = None,
         raw_data: NDArray = None,
         func: Optional[Callable] = None,
@@ -1036,6 +1050,7 @@ class DesignerRatio(_DesignerBase):
         
         self.target = target
         self.alpha = alpha
+        self.beta = beta
         self.rng = np.random.default_rng(seed)
         self.name = name
         self.pval_func = pval_func
@@ -1130,6 +1145,7 @@ class DesignerRatio(_DesignerBase):
             first_argument = (
                 (num_raw[test_idx], denom_raw[test_idx]),
                 (control_num, control_denom),
+                (num_raw, denom_raw),
                 test_idx, control_idx, idx
             )
         else:
@@ -1238,6 +1254,7 @@ class DesignerRatioLin(_DesignerBase):
         self,
         target: Union[AaDataRatio, Tuple, List],
         alpha: float = 0.05,
+        beta: float = 0.20,
         seed: int = 42,
         name: Optional[str] = None,
         pval_func: Optional[Callable] = None,
@@ -1271,6 +1288,7 @@ class DesignerRatioLin(_DesignerBase):
 
         self.target = target
         self.alpha = alpha
+        self.beta = beta
         self.rng = np.random.default_rng(seed)
         self.name = name
         self.pval_func = pval_func
@@ -1348,6 +1366,7 @@ class DesignerRatioLin(_DesignerBase):
             first_argument = (
                 (num_raw[test_idx], denom_raw[test_idx]),
                 (control_num, control_denom),
+                (num_raw, denom_raw),
                 test_idx, control_idx, idx
             )
         else:
@@ -1436,6 +1455,7 @@ class DesignerDept1s(_DesignerBase):
         self,
         target: Union[AaDataDept1s, pd.Series, np.ndarray],
         alpha: float = 0.05,
+        beta: float = 0.20,
         seed: int = 42,
         name: Optional[str] = None,
         pval_func: Optional[Callable] = None,
@@ -1454,6 +1474,7 @@ class DesignerDept1s(_DesignerBase):
         
         self.target = target
         self.alpha = alpha
+        self.beta = beta
         self.rng = np.random.default_rng(seed)
         self.name = name
         self.pval_func = pval_func
@@ -1546,7 +1567,7 @@ class DesignerDept1s(_DesignerBase):
             elif isinstance(self.add_effect, FunctionEffectSizer):
                 # One-sample design: no control split, so control/control_idx
                 # are None and the test sample is the sign-flipped resample.
-                first_argument = (data, None, idx, None, idx)
+                first_argument = (data, None, self.target.data_raw, idx, None, idx)
             else:
                 first_argument = self.target.data_raw[idx]
             data = self.add_effect(
@@ -1756,14 +1777,62 @@ class BenchMarker(_BenchMarkerBase):
             labels_str += f", ... ({n_designers} total)"
         return f"BenchMarker(n_designers={n_designers}, labels=[{labels_str}], alpha={self.alpha}, beta={self.beta})"
 
+    @staticmethod
+    def _effective_variance(designer) -> float:
+        """Variance of the metric after applying any variance-reduction transformer.
+
+        Handles all designer types:
+        - ``DesignerIid``: 1-D ``data_raw``; if a transformer is present it is
+          applied to the *full* dataset (not a split) and the variance of the
+          result is returned.
+        - ``DesignerRatioLin``: the ratio is linearised (``num - θ·denom`` with
+          θ = global ratio) and the optional transformer is then applied.
+        - ``DesignerRatio``: per-user ratio ``num/denom``; transformer (if any)
+          receives ``(covariates, (num, denom))`` and its output ratio is used.
+        """
+        target = designer.target
+
+        if isinstance(designer, DesignerIid):
+            y = target.data_raw.astype(float)
+            if target.transformer is not None and target.covariates is not None:
+                y = np.asarray(target.transformer(target.covariates, y), dtype=float)
+            return float(np.var(y))
+
+        elif isinstance(designer, DesignerRatioLin):
+            num, denom = target.data_raw
+            num, denom = num.astype(float), denom.astype(float)
+            # Linearise: num - θ·denom with θ estimated on the full dataset
+            theta = num.sum() / denom.sum() if denom.sum() != 0 else 0.0
+            lin = num - theta * denom
+            if target.transformer is not None and target.covariates is not None:
+                lin = np.asarray(target.transformer(target.covariates, lin), dtype=float)
+            return float(np.var(lin))
+
+        else:  # DesignerRatio
+            num, denom = target.data_raw
+            num, denom = num.astype(float), denom.astype(float)
+            if target.transformer is not None and target.covariates is not None:
+                num_adj, denom_adj = target.transformer(target.covariates, (num, denom))
+                ratio = np.asarray(num_adj, dtype=float) / np.asarray(denom_adj, dtype=float)
+            else:
+                ratio = num / denom
+            return float(np.var(ratio))
+
     def compare_variance(self):
+        """Compare variance across designers, accounting for any transformer.
 
+        For each designer the *effective* variance is computed: the variance of
+        the metric *after* applying the variance-reduction transformer
+        (CUPED/CUPAC/PostStratification/…) to the full dataset.  This gives a
+        fair apples-to-apples comparison and correctly handles all designer
+        types (iid, ratio, linearised ratio).
+        """
         designers = self.designers
+        competitors_labels = self.labels[1:]
 
-        competitors_labels   = self.labels[1:]
-
-        baseline_value     = designers[0].target.data_raw.var()
-        competitors_values = [designers[i].target.data_raw.var() for i in range(1, len(designers))]
+        baseline_value     = self._effective_variance(designers[0])
+        competitors_values = [self._effective_variance(designers[i])
+                              for i in range(1, len(designers))]
 
         ax, res = plot_comparison_bars(
             baseline=baseline_value,
@@ -2073,7 +2142,7 @@ class BenchMarker(_BenchMarkerBase):
         designer2: Union['DesignerIid', 'DesignerRatio'],
         designer1_diff_func: Optional[Callable] = None,
         designer2_diff_func: Optional[Callable] = None,
-        n_sims: int = 100,
+        n_sims: int = 10_000,
         control_size: Optional[Union[int, float]] = None,
         effect: float = 0.05,
         n_jobs: int = 1,
@@ -2165,9 +2234,10 @@ class BenchMarker(_BenchMarkerBase):
         3. Bland-Altman plot (mean vs difference)
         4. Statistics summary box
         """
-        # Validation
-        len1 = len(designer1.target.data if hasattr(designer1.target, 'data') else designer1.target.numerator)
-        len2 = len(designer2.target.data if hasattr(designer2.target, 'data') else designer2.target.numerator)
+        # Validation — use .idx which is set by all data classes (AaDataIid,
+        # AaDataRatio, AaDataDept1s) and always has length == n observations.
+        len1 = len(designer1.target.idx)
+        len2 = len(designer2.target.idx)
         
         if len1 != len2:
             raise ValueError(
@@ -2196,6 +2266,39 @@ class BenchMarker(_BenchMarkerBase):
         if designer2_diff_func is None:
             designer2_diff_func = lambda t, c: np.mean(t) - np.mean(c)
 
+        def _apply_iid_transform(target, test, control, test_idx, control_idx):
+            """Apply variance-reduction transformer for iid designers (if present)."""
+            tr = target.transformer
+            cov = target.covariates
+            if tr is None or cov is None:
+                return test, control
+            n_test = len(test)
+            pooled = np.concatenate([test, control])
+            pooled_cov = _concat_rows(
+                _take_rows(cov, test_idx),
+                _take_rows(cov, control_idx)
+            )
+            pooled_adj = tr(pooled_cov, pooled)
+            return pooled_adj[:n_test], pooled_adj[n_test:]
+
+        def _apply_ratio_transform(target, test_num, test_denom,
+                                   control_num, control_denom,
+                                   test_idx, control_idx):
+            """Apply variance-reduction transformer for ratio designers (if present)."""
+            tr = target.transformer
+            cov = target.covariates
+            if tr is None or cov is None:
+                return test_num, test_denom, control_num, control_denom
+            n_test = len(test_num)
+            pooled_num   = np.concatenate([test_num,   control_num])
+            pooled_denom = np.concatenate([test_denom, control_denom])
+            pooled_cov   = _concat_rows(
+                _take_rows(cov, test_idx),
+                _take_rows(cov, control_idx)
+            )
+            adj_num, adj_denom = tr(pooled_cov, (pooled_num, pooled_denom))
+            return adj_num[:n_test], adj_denom[:n_test], adj_num[n_test:], adj_denom[n_test:]
+
         def single_sim(sim_idx):
             """Single simulation with shared random split."""
             # Generate shared random indices for this simulation
@@ -2221,7 +2324,7 @@ class BenchMarker(_BenchMarkerBase):
             else:
                 control2 = (target2.data_raw[0][control_idx], target2.data_raw[1][control_idx])
             
-            # Designer 1: apply effect and calculate delta
+            # Apply effect (same logic as _single_sim in each designer class)
             if effect != 0.0:
                 if isinstance(designer1.add_effect, CustomEffectSizer):
                     first_argument1 = test_idx
@@ -2230,15 +2333,12 @@ class BenchMarker(_BenchMarkerBase):
                         test_raw1 = target1.data_raw[test_idx]
                     else:
                         test_raw1 = (target1.data_raw[0][test_idx], target1.data_raw[1][test_idx])
-                    first_argument1 = (test_raw1, control1, test_idx, control_idx, idx)
+                    first_argument1 = (test_raw1, control1, target1.data_raw, test_idx, control_idx, idx)
                 else:
                     if isinstance(designer1, DesignerIid):
                         first_argument1 = target1.data_raw[test_idx]
                     else:
                         first_argument1 = (target1.data_raw[0][test_idx], target1.data_raw[1][test_idx])
-                    # covariates1 = None
-                    # if target1.covariates is not None:
-                    #     covariates1 = target1.covariates[test_idx]
                 test1 = designer1.add_effect(
                     first_argument1,
                     effect=effect,
@@ -2252,15 +2352,12 @@ class BenchMarker(_BenchMarkerBase):
                         test_raw2 = target2.data_raw[test_idx]
                     else:
                         test_raw2 = (target2.data_raw[0][test_idx], target2.data_raw[1][test_idx])
-                    first_argument2 = (test_raw2, control2, test_idx, control_idx, idx)
+                    first_argument2 = (test_raw2, control2, target2.data_raw, test_idx, control_idx, idx)
                 else:
                     if isinstance(designer2, DesignerIid):
                         first_argument2 = target2.data_raw[test_idx]
                     else:
                         first_argument2 = (target2.data_raw[0][test_idx], target2.data_raw[1][test_idx])
-                    # covariates2 = None
-                    # if target2.covariates is not None:
-                    #     covariates2 = target2.covariates[test_idx]
                 test2 = designer2.add_effect(
                     first_argument2,
                     effect=effect,
@@ -2276,9 +2373,50 @@ class BenchMarker(_BenchMarkerBase):
                 else:
                     test2 = (target2.data_raw[0][test_idx], target2.data_raw[1][test_idx])
 
-            # Calculate mean differences (effect estimates)
-            # delta1 = np.mean(test1) - np.mean(control1)
-            # delta2 = np.mean(test2) - np.mean(control2)
+            # Apply variance-reduction transformer (CUPED/CUPAC/etc.) for each
+            # designer, mirroring the logic in _single_sim.  The transformer is
+            # fitted ONCE on the pooled test+control sample so the SAME
+            # coefficients are applied to both groups; the intercept therefore
+            # cancels in the comparison and the injected effect is preserved.
+            #
+            # DesignerRatioLin is special: it must be LINEARIZED first (collapsing
+            # (num, denom) -> 1-D), and THEN the iid-style transformer is applied
+            # on the linearized values — exactly as in DesignerRatioLin._single_sim.
+            # The diff_func therefore receives 1-D linearized arrays, not tuples.
+            if isinstance(designer1, DesignerIid):
+                test1, control1 = _apply_iid_transform(
+                    target1, test1, control1, test_idx, control_idx)
+            elif isinstance(designer1, DesignerRatioLin):
+                t1_num, t1_denom = test1
+                c1_num, c1_denom = control1
+                test1, control1, _ = Linearizer(
+                    (t1_num, t1_denom), (c1_num, c1_denom))
+                test1, control1 = _apply_iid_transform(
+                    target1, test1, control1, test_idx, control_idx)
+            else:  # DesignerRatio
+                t1_num, t1_denom = test1
+                c1_num, c1_denom = control1
+                t1_num, t1_denom, c1_num, c1_denom = _apply_ratio_transform(
+                    target1, t1_num, t1_denom, c1_num, c1_denom, test_idx, control_idx)
+                test1, control1 = (t1_num, t1_denom), (c1_num, c1_denom)
+
+            if isinstance(designer2, DesignerIid):
+                test2, control2 = _apply_iid_transform(
+                    target2, test2, control2, test_idx, control_idx)
+            elif isinstance(designer2, DesignerRatioLin):
+                t2_num, t2_denom = test2
+                c2_num, c2_denom = control2
+                test2, control2, _ = Linearizer(
+                    (t2_num, t2_denom), (c2_num, c2_denom))
+                test2, control2 = _apply_iid_transform(
+                    target2, test2, control2, test_idx, control_idx)
+            else:  # DesignerRatio
+                t2_num, t2_denom = test2
+                c2_num, c2_denom = control2
+                t2_num, t2_denom, c2_num, c2_denom = _apply_ratio_transform(
+                    target2, t2_num, t2_denom, c2_num, c2_denom, test_idx, control_idx)
+                test2, control2 = (t2_num, t2_denom), (c2_num, c2_denom)
+
             delta1 = designer1_diff_func(test1, control1)
             delta2 = designer2_diff_func(test2, control2)
             
@@ -2531,8 +2669,9 @@ class BenchMarker(_BenchMarkerBase):
     def multi_test_power(
         self,
         pval_func: Optional[Callable[[NDArray, NDArray], float]] = None,
-        effects: Optional[Union[float, List[float]]] = None,
+        bar_effect: Optional[Union[float, List[float]]] = None,
         multi_corrections: Union[str, List[str]] = 'all',
+        power_curve_effects: Optional[List[float]] = None,
         n_sims: int = 1_000,
         control_size: Optional[Union[int, float]] = None,
         n_jobs: int = 1,
@@ -2544,17 +2683,18 @@ class BenchMarker(_BenchMarkerBase):
         
         Runs AB simulations across all designers simultaneously with specified effects
         and applies multiple testing corrections to measure different power metrics.
+        Optionally sweeps over a range of effect sizes to build power curves.
         
         Parameters
         ----------
         pval_func : callable, optional
             Function to compute p-value: (test, control) -> float.
             If None, uses pval_func from each designer.
-        effects : float or list of float, optional
-            Effect sizes to apply:
+        bar_effect : float or list of float, optional
+            Effect size(s) applied to all designers for the bar-chart summary.
             - float: same effect for all designers
-            - list: specific effect for each designer
-            - None: default 0.05 for all designers
+            - list of float: one effect per designer (length must equal number of designers)
+            - None: defaults to 0.05 for all designers
         multi_corrections : str, tuple, or list, default='all'
             Correction methods to compare. Same format as in multi_test_1_type_error:
             - 'all': test all built-in methods
@@ -2565,12 +2705,20 @@ class BenchMarker(_BenchMarkerBase):
             - mixed list: combination of strings and tuples
             
             See multi_test_1_type_error documentation for detailed examples.
+        power_curve_effects : list of float, optional
+            Sequence of uniform effect sizes to sweep over for power curves.
+            At each point the same scalar effect is applied to **all** designers.
+            When provided, a second row of plots (one curve per correction method)
+            is added to the visualization, and each entry in ``results`` gains a
+            ``'power_curve'`` sub-dict with keys ``'avg_power'``,
+            ``'any_pair_power'`` and ``'all_pairs_power'`` (lists aligned with
+            ``power_curve_effects``).
         n_sims : int, default=1_000
-            Number of AB simulations.
-        n_controls : int or float, optional
+            Number of AB simulations per effect size point.
+        control_size : int or float, optional
             Control group size (same format as in aa_benchmark).
         n_jobs : int, default=1
-            Number of parallel processes (currently sequential for multiple testing).
+            Number of parallel processes.
         verbose : bool, default=True
             Show progress and results.
         figsize : tuple, optional
@@ -2584,6 +2732,8 @@ class BenchMarker(_BenchMarkerBase):
             - 'any_pair_power': probability of detecting ≥1 effect
             - 'all_pairs_power': probability of detecting all effects
             - 'rejections': array of rejection counts per simulation
+            - 'power_curve': dict with 'avg_power', 'any_pair_power',
+              'all_pairs_power' lists (only when ``power_curve_effects`` is given)
         
         Notes
         -----
@@ -2598,10 +2748,13 @@ class BenchMarker(_BenchMarkerBase):
         - **All-Pairs Power** (AllP): Probability of detecting all effects.
           Formula: P(rejections = total tests)
         
-        Visualization includes 3 plots:
+        Visualization includes 3 bar-chart plots:
         1. Average Power comparison across methods
         2. Any-Pair Power comparison
         3. All-Pairs Power comparison
+        
+        When ``power_curve_effects`` is supplied, a second row of 3 line plots
+        (one curve per correction method) is added below.
         
         Trade-off: Methods with stricter error control (e.g., Bonferroni) typically
         have lower power than methods with relaxed control (e.g., Benjamini-Hochberg).
@@ -2610,6 +2763,7 @@ class BenchMarker(_BenchMarkerBase):
         --------
         >>> from mcab.core import BenchMarker, DesignerIid, AaDataIid, RandomData
         >>> from scipy import stats
+        >>> import numpy as np
         >>>
         >>> # Create multiple designers
         >>> data = RandomData().normal_data()
@@ -2622,22 +2776,23 @@ class BenchMarker(_BenchMarkerBase):
         >>> bm = BenchMarker(designers, alpha=0.05)
         >>> results = bm.multi_test_power(
         ...     pval_func=lambda t, c: stats.ttest_ind(t, c).pvalue,
-        ...     effects=0.05,  # 5% effect for all designers
+        ...     bar_effect=0.05,
         ...     multi_corrections=['no_correction', 'bonferroni', 'benjamini_hochberg'],
         ...     n_sims=1000
         ... )
         >>>
-        >>> # Compare power metrics
-        >>> for method, res in results.items():
-        ...     print(f"{method}:")
-        ...     print(f"  Avg Power: {res['avg_power']:.3f}")
-        ...     print(f"  Any-Pair: {res['any_pair_power']:.3f}")
-        ...     print(f"  All-Pairs: {res['all_pairs_power']:.3f}")
+        >>> # Power curves across a range of effects
+        >>> results = bm.multi_test_power(
+        ...     pval_func=lambda t, c: stats.ttest_ind(t, c).pvalue,
+        ...     bar_effect=0.05,
+        ...     power_curve_effects=np.linspace(0.01, 0.10, 10),
+        ...     n_sims=500
+        ... )
         >>>
-        >>> # Test with different effects per designer
+        >>> # Different effects per designer
         >>> results2 = bm.multi_test_power(
         ...     pval_func=lambda t, c: stats.ttest_ind(t, c).pvalue,
-        ...     effects=[0.02, 0.03, 0.05, 0.07, 0.10],  # varying effects
+        ...     bar_effect=[0.02, 0.03, 0.05, 0.07, 0.10],
         ...     n_sims=500
         ... )
         """
@@ -2646,18 +2801,18 @@ class BenchMarker(_BenchMarkerBase):
         # Parse correction methods (supports strings, tuples with custom functions, and lists)
         correction_methods = self._parse_multi_corrections(multi_corrections)
         
-        # Default effects: same for all designers
-        if effects is None:
-            effects = [0.05] * len(self.designers)
-        elif isinstance(effects, (int, float)):
-            effects = [effects] * len(self.designers)
+        # Normalise bar_effect to a per-designer list
+        if bar_effect is None:
+            bar_effect = [0.05] * len(self.designers)
+        elif isinstance(bar_effect, (int, float)):
+            bar_effect = [bar_effect] * len(self.designers)
         
         n_controls = self.designers[0].validated_n_controls(control_size)
         n_designers = len(self.designers)
         
         # Run simulations with parallelization
         if verbose:
-            print(f'Running {n_sims} AB simulations for {n_designers} designers with effects {effects}...')
+            print(f'Running {n_sims} AB simulations for {n_designers} designers with bar_effect {bar_effect}...')
         
         if verbose and n_jobs != 1:
             ParallelClass = ProgressParallel(
@@ -2672,66 +2827,103 @@ class BenchMarker(_BenchMarkerBase):
         else:
             ParallelClass = Parallel(n_jobs=n_jobs, initializer=_worker_init_warnings)
         
-        def single_ab_sim(sim_idx):
-            # Generate shared random indices for this simulation
-            rng = np.random.default_rng(sim_idx)
-            idx = np.arange(len(self.designers[0].target.data_raw))
-            rng.shuffle(idx)
-            
-            pvalues_sim = []
-            for designer, effect in zip(self.designers, effects):
-                pval = designer._single_sim(sim_idx, pval_func or designer.pval_func, n_controls, n_jobs, idx, effect=effect, return_rejection=False)
-                pvalues_sim.append(pval)
-            
-            return pvalues_sim
-        
+        def _run_ab_sims(effects_list):
+            """Run n_sims AB simulations and return (n_sims, n_designers) p-value matrix."""
+            def single_ab_sim(sim_idx):
+                rng = np.random.default_rng(sim_idx)
+                idx = np.arange(len(self.designers[0].target.data_raw))
+                rng.shuffle(idx)
+                return [
+                    designer._single_sim(
+                        sim_idx, pval_func or designer.pval_func,
+                        n_controls, n_jobs, idx,
+                        effect=eff, return_rejection=False
+                    )
+                    for designer, eff in zip(self.designers, effects_list)
+                ]
+
+            if n_jobs == 1:
+                return np.array([single_ab_sim(i) for i in range(n_sims)])
+            return np.array(ParallelClass(delayed(single_ab_sim)(i) for i in range(n_sims)))
+
         if n_jobs == 1:
             all_pvalues_matrix = []
             for sim_idx in tqdm(range(n_sims), disable=not verbose, desc='AB simulations'):
-                all_pvalues_matrix.append(single_ab_sim(sim_idx))
+                rng = np.random.default_rng(sim_idx)
+                idx = np.arange(len(self.designers[0].target.data_raw))
+                rng.shuffle(idx)
+                row = [
+                    designer._single_sim(
+                        sim_idx, pval_func or designer.pval_func,
+                        n_controls, n_jobs, idx,
+                        effect=eff, return_rejection=False
+                    )
+                    for designer, eff in zip(self.designers, bar_effect)
+                ]
+                all_pvalues_matrix.append(row)
         else:
             all_pvalues_matrix = ParallelClass(
-                delayed(single_ab_sim)(sim_idx) for sim_idx in range(n_sims)
+                delayed(lambda i: [
+                    designer._single_sim(
+                        i, pval_func or designer.pval_func,
+                        n_controls, n_jobs,
+                        np.random.default_rng(i).permutation(len(self.designers[0].target.data_raw)),
+                        effect=eff, return_rejection=False
+                    )
+                    for designer, eff in zip(self.designers, bar_effect)
+                ])(sim_idx) for sim_idx in range(n_sims)
             )
         
         all_pvalues_matrix = np.array(all_pvalues_matrix)  # shape: (n_sims, n_designers)
         
-        # Calculate power metrics for each correction method
-        results = {}
+        def _compute_metrics(pv_matrix):
+            """Compute avg/any/all power per correction method from a p-value matrix."""
+            out = {}
+            for method_name, correction_func in correction_methods:
+                rejs = np.array([
+                    np.sum(correction_func(pv_matrix[i]) < self.alpha)
+                    for i in range(pv_matrix.shape[0])
+                ])
+                out[method_name] = {
+                    'avg_power':       float(np.mean(rejs) / n_designers),
+                    'any_pair_power':  float(np.mean(rejs > 0)),
+                    'all_pairs_power': float(np.mean(rejs == n_designers)),
+                    'rejections':      rejs,
+                }
+            return out
+
+        results = _compute_metrics(all_pvalues_matrix)
         
-        for method_name, correction_func in correction_methods:
-            rejections_per_sim = []  # number of rejections in each simulation
-            
-            for sim_idx in range(n_sims):
-                pvalues = all_pvalues_matrix[sim_idx, :]
-                
-                # Apply correction using the provided function
-                adjusted_pvalues = correction_func(pvalues)
-                
-                # Count rejections
-                n_rejections = np.sum(adjusted_pvalues < self.alpha)
-                rejections_per_sim.append(n_rejections)
-            
-            rejections_per_sim = np.array(rejections_per_sim)
-            
-            # Average power (proportion of true effects detected)
-            avg_power = np.mean(rejections_per_sim) / n_designers
-            
-            # Any-pair power (at least one rejection)
-            any_pair_power = np.mean(rejections_per_sim > 0)
-            
-            # All-pairs power (all rejections)
-            all_pairs_power = np.mean(rejections_per_sim == n_designers)
-            
-            results[method_name] = {
-                'avg_power': avg_power,
-                'any_pair_power': any_pair_power,
-                'all_pairs_power': all_pairs_power,
-                'rejections': rejections_per_sim
-            }
+        # ── Power curves ──────────────────────────────────────────────────────
+        if power_curve_effects is not None:
+            curve_iter = (
+                tqdm(power_curve_effects, desc='Power curves', leave=True)
+                if verbose else power_curve_effects
+            )
+            # Initialise per-method curve containers
+            for method_name, _ in correction_methods:
+                results[method_name]['power_curve'] = {
+                    'avg_power': [], 'any_pair_power': [], 'all_pairs_power': []
+                }
+
+            for curve_eff in curve_iter:
+                curve_effects_list = [curve_eff] * n_designers
+                curve_pv_matrix = _run_ab_sims(curve_effects_list)
+                curve_metrics = _compute_metrics(curve_pv_matrix)
+                for method_name, _ in correction_methods:
+                    cm = curve_metrics[method_name]
+                    pc = results[method_name]['power_curve']
+                    pc['avg_power'].append(cm['avg_power'])
+                    pc['any_pair_power'].append(cm['any_pair_power'])
+                    pc['all_pairs_power'].append(cm['all_pairs_power'])
         
         # Visualization
-        plot_multi_test_power(results, n_designers, figsize)
+        plot_multi_test_power(
+            results, n_designers,
+            power_curve_effects=power_curve_effects,
+            beta=self.beta,
+            figsize=figsize,
+        )
         
         return results
 
