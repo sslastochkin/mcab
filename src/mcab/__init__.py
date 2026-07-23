@@ -25,7 +25,6 @@ Statistical Tests
 
 Example Usage
 -------------
-```python
 >>> from mcab import RandomData, AaDataIid, DesignerIid
 >>> from scipy import stats
 >>> 
@@ -48,7 +47,6 @@ Example Usage
 ...     pval_func=lambda t, c: stats.ttest_ind(t, c).pvalue,
 ...     target_power=0.8
 ... )
-```
 """
 
 __version__ = "0.1.0"
