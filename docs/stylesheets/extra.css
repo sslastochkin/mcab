@@ -128,21 +128,8 @@
   background: #1e2a3a;
 }
 
-/* Исправляет отображение source code в mkdocstrings */
-.doc-contents details > div.highlight {
-  margin-left: 0 !important;
+/* Fix source code indentation in mkdocstrings */
+.doc-contents details {
+  padding-left: 0 !important;
 }
 
-.doc-contents details code {
-  font-size: 0.85em;
-}
-
-.doc-contents details pre code {
-  white-space: pre;
-  text-indent: 0;
-  padding-left: 0;
-}
-
-.doc-contents details .highlight {
-  margin-left: 0 !important;
-}
