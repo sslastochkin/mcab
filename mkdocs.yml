@@ -3,12 +3,26 @@ site_description: MCAB Tutorial & Documentation
 site_url: https://sslastochkin.github.io/mcab/
 
 nav:
-  - 'Main': README.md
+  - 'Home': README.md
   - 'Tutorial': 
     - 'First steps': 'tutorial/01_first_steps.md'
     - 'Data and Effects': 'tutorial/02_data_and_effects.md'
     - 'Variance Reduction': 'tutorial/03_variance_reduction.md'
     - 'Multiple Corrections': 'tutorial/04_multiple_corrections.md'
+  - User Guide:
+      - 'Overview': 'guide/00_index.md'
+      - '1. Why Monte Carlo Over Formulas': 'guide/01_why_monte_carlo.md'
+      - '2. Loading Your Own Data': 'guide/02_load_your_data.md'
+      - '3. Type I Error and Choosing a Test': 'guide/03_type_one_error.md'
+      - '4. Reproducibility and Seeds': 'guide/04_reproducibility_seeds.md'
+      - '5. Injecting the Effect': 'guide/05_effect_injection.md'
+      - '6. Power, MDE and Sample Size': 'guide/06_power_mde_n.md'
+      - '7. Non-Randomized (Constructed) Controls': 'guide/07_non_randomized.md'
+      - '8. Power Boosting Methods': 'guide/08_power_boosting.md'
+      - '9. Comparing Setups and Picking the Best': 'guide/09_compare_setups.md'
+      - '10. Multiple Testing': 'guide/10_multiple_testing.md'
+      - '11. Empirical Tests': 'guide/11_empirical_tests.md'
+      - '12. End-to-End Recipes': 'guide/12_recipes.md'
   - 'Api':
     - 'Overview': 'api/index.md'
     - 'core.py': 'api/core.md'
