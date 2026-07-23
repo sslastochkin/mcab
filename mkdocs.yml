@@ -9,6 +9,8 @@ nav:
     - 'Data and Effects': 'tutorial/02_data_and_effects.md'
     - 'Variance Reduction': 'tutorial/03_variance_reduction.md'
     - 'Multiple Corrections': 'tutorial/04_multiple_corrections.md'
+  - 'Documentation'
+    - Overview: api/index.md
 
 theme:
   name: material
@@ -101,3 +103,12 @@ plugins:
       include_source: false
       ignore_h1_titles: true
       execute: false
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src] # code path (src/mcab)
+          options:
+            docstring_style: google # google / numpy / sphinx
+            show_source: true
+            show_root_heading: true
+            merge_init_into_class: true
