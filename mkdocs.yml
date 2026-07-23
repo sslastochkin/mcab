@@ -9,8 +9,8 @@ nav:
     - 'Data and Effects': 'tutorial/02_data_and_effects.md'
     - 'Variance Reduction': 'tutorial/03_variance_reduction.md'
     - 'Multiple Corrections': 'tutorial/04_multiple_corrections.md'
-  - 'Documentation'
-    - Overview: api/index.md
+  - 'Api'
+    - Overview: 'api/index.md'
 
 theme:
   name: material
