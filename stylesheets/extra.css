@@ -156,12 +156,3 @@
 .md-typeset .highlighttable tbody tr:hover td {
   background: transparent !important;
 }
-
-/* ── Убирает blockquote-черты в секции Examples (mkdocstrings) ── */
-.doc-contents blockquote {
-  border-left: 2px solid var(--md-default-fg-color--lighter) !important;
-  padding-left: 0.6rem !important;
-  margin-left: 0 !important;
-  font-style: normal !important;
-  color: inherit !important;
-}
