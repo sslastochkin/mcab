@@ -21,6 +21,7 @@ theme:
     - navigation.tracking
     - navigation.footer
     - toc.follow
+    - toc.integrate
     - search.suggest
     - search.highlight
     - content.code.copy
@@ -96,4 +97,7 @@ plugins:
       lang: en
   - minify:
       minify_html: true
-  - mkdocs-jupyter
+  - mkdocs-jupyter:
+      include_source: false
+      ignore_h1_titles: true
+      execute: false
