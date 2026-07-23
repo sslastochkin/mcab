@@ -114,7 +114,7 @@ plugins:
         python:
           paths: [src] # code path (src/mcab)
           options:
-            docstring_style: google # google / numpy / sphinx
+            docstring_style: numpy # google / numpy / sphinx
             show_source: true
             show_root_heading: true
             merge_init_into_class: true
