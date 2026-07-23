@@ -29,6 +29,13 @@ jobs:
         run: |
           pip install -r mkdocs_requirements.txt
 
+      - name: Convert ipynb
+        run: |
+          for nb in docs/tutorial/*.ipynb; do
+            jupyter nbconvert --to markdown "$nb" --output-dir docs/tutorial/
+          done
+          sed -i 's/\.ipynb/.md/g' mkdocs.yml
+
       - name: Build the site
         run: mkdocs build
 
