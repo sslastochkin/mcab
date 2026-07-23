@@ -14,36 +14,40 @@
     padding: 4px 0;
 }
 
-/* ── Уменьшить общий шрифт ───────────────────────────── */
+/* ── Общий шрифт страницы ─────────────────────────────── */
 .md-content {
-  font-size: 0.875rem; /* 14px вместо 16px */
+  font-size: 0.82rem;   /* ~13px */
 }
 
-/* ── Уменьшить шрифт в коде ─────────────────────────── */
-.md-content code,
+/* ── Шрифт в блоках кода ─────────────────────────────── */
+.md-content pre,
 .md-content pre code {
-  font-size: 0.78rem;
+  font-size: 0.72rem;   /* ~11.5px */
+  line-height: 1.45;
 }
 
-/* ── Ввод ячейки: ```python — синяя левая полоска ───── */
-.md-content .highlight code[class*="language-"] {
+/* ── Ввод ячейки: ```python — синяя левая полоска ──────── */
+.md-content .highlight {
   border-left: 3px solid #4a90d9;
-  display: block;
-  padding-left: 0.6em;
 }
 
-/* ── Вывод ячейки: ``` без языка — серый фон ─────────── */
-.md-content .highlight code:not([class]) {
-  display: block;
-  padding-left: 0.6em;
-  border-left: 3px solid #aaa;
-  background: rgba(0,0,0,0.04);
-  color: #444;
+/* ── Вывод ячейки: ``` без языка ────────────────────────── */
+/* без подложки, без рамки, тот же моно-шрифт, чуть тише   */
+.md-content pre:has(code:not([class])) {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0 0 0 0.5em;
+  margin-top: -0.5em;
 }
 
-/* тёмная тема */
-[data-md-color-scheme="slate"] .md-content .highlight code:not([class]) {
-  background: rgba(255,255,255,0.05);
-  border-left-color: #666;
-  color: #bbb;
+.md-content pre:has(code:not([class])) code {
+  background: transparent;
+  color: inherit;
+  opacity: 0.75;
+}
+
+/* тёмная тема — вывод чуть светлее */
+[data-md-color-scheme="slate"] .md-content pre:has(code:not([class])) code {
+  opacity: 0.65;
 }
