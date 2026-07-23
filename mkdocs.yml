@@ -5,10 +5,10 @@ site_url: https://sslastochkin.github.io/mcab/
 nav:
   - 'Main': README.md
   - 'Tutorial': 
-    - 'First steps': 'tutorial/01_first_steps.ipynb'
-    - 'Data and Effects': 'tutorial/02_data_and_effects.ipynb'
-    - 'Variance Reduction': 'tutorial/03_variance_reduction.ipynb'
-    - 'Multiple Corrections': 'tutorial/04_multiple_corrections.ipynb'
+    - 'First steps': 'tutorial/01_first_steps.md'
+    - 'Data and Effects': 'tutorial/02_data_and_effects.md'
+    - 'Variance Reduction': 'tutorial/03_variance_reduction.md'
+    - 'Multiple Corrections': 'tutorial/04_multiple_corrections.md'
 
 theme:
   name: material
