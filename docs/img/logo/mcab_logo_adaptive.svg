@@ -1,0 +1,120 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 155" width="480" height="155">
+  <!--
+    MCAB adaptive logo — dark/light via CSS prefers-color-scheme
+    Dark  : teal (#00ebc7) + violet (#9f7aea), dark background
+    Light : matplotlib blue (#1f77b4) + orange (#ff7f0e), white background, black text
+  -->
+  <defs>
+    <filter id="gA" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="gB" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="gDot" x="-120%" y="-120%" width="340%" height="340%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <style>
+    /* ── DARK (default) ── */
+    .bg        { fill: #090b15 }
+    .baseline  { stroke: #1c2040; stroke-width: 1.2px }
+    .sep-line  { stroke: #252845; stroke-width: 0.8px }
+
+    .fill-a    { fill: #00ebc7; fill-opacity: 0.10 }
+    .fill-b    { fill: #7c3aed; fill-opacity: 0.10 }
+    .fill-ab   { fill: #5060b0; fill-opacity: 0.07 }
+
+    .glow-a    { fill: #00ebc7; fill-opacity: 0.06 }
+    .glow-b    { fill: #7c3aed; fill-opacity: 0.08 }
+
+    .curve-a   { stroke: #00ebc7; stroke-width: 2.6px }
+    .curve-b   { stroke: #9f7aea; stroke-width: 2.6px }
+
+    .dot-a     { fill: #00ebc7 }
+    .dot-b     { fill: #c4b5fd }
+
+    .txt-mc    { fill: #00ebc7 }
+    .txt-ab    { fill: #c4b5fd }
+    .txt-tag   { fill: #4a5278 }
+
+    /* ── LIGHT ── */
+    @media (prefers-color-scheme: light) {
+      .bg       { fill: #ffffff }
+      .baseline { stroke: #c8cedf; stroke-width: 1.2px }
+      .sep-line { stroke: #d4d8ea; stroke-width: 0.8px }
+
+      .fill-a   { fill: #1f77b4; fill-opacity: 0.10 }
+      .fill-b   { fill: #ff7f0e; fill-opacity: 0.10 }
+      .fill-ab  { fill: #888888; fill-opacity: 0.05 }
+
+      .glow-a   { fill: #1f77b4; fill-opacity: 0.05 }
+      .glow-b   { fill: #ff7f0e; fill-opacity: 0.06 }
+
+      .curve-a  { stroke: #1f77b4; stroke-width: 2.6px }
+      .curve-b  { stroke: #ff7f0e; stroke-width: 2.6px }
+
+      .dot-a    { fill: #1f77b4 }
+      .dot-b    { fill: #ff7f0e }
+
+      .txt-mc   { fill: #111111 }
+      .txt-ab   { fill: #111111 }
+      .txt-tag  { fill: #6b7280 }
+    }
+  </style>
+
+  <!-- ── Background ── -->
+  <rect width="480" height="155" rx="0" class="bg"/>
+
+  <!-- ── Ambient glow blobs ── -->
+  <circle cx="57"  cy="52" r="40" class="glow-a"/>
+  <circle cx="105" cy="52" r="40" class="glow-b"/>
+
+  <!-- ── Bell filled areas ── -->
+  <path d="M 12,134 C 26,134 44,24 57,22 C 70,20 88,134 102,134 Z"
+        class="fill-a"/>
+  <path d="M 60,134 C 74,134 92,24 105,22 C 118,20 136,134 150,134 Z"
+        class="fill-b"/>
+  <path d="M 60,134 C 68,134 75,80 81,68 C 87,80 94,134 102,134 Z"
+        class="fill-ab"/>
+
+  <!-- ── Baseline ── -->
+  <line x1="12" y1="134" x2="150" y2="134" class="baseline"/>
+
+  <!-- ── Bell strokes ── -->
+  <path d="M 12,134 C 26,134 44,24 57,22 C 70,20 88,134 102,134"
+        fill="none" class="curve-a"
+        stroke-linecap="round" stroke-linejoin="round"
+        filter="url(#gA)"/>
+  <path d="M 60,134 C 74,134 92,24 105,22 C 118,20 136,134 150,134"
+        fill="none" class="curve-b"
+        stroke-linecap="round" stroke-linejoin="round"
+        filter="url(#gB)"/>
+
+  <!-- ── Peak dots ── -->
+  <circle cx="57"  cy="22" r="3.8" class="dot-a" filter="url(#gDot)"/>
+  <circle cx="105" cy="22" r="3.8" class="dot-b" filter="url(#gDot)"/>
+
+  <!-- ── Wordmark ── -->
+  <text x="174" y="105"
+        font-family="'Inter','Helvetica Neue','Arial',sans-serif"
+        font-size="80" font-weight="900" letter-spacing="-3">
+    <tspan class="txt-mc">MC</tspan><tspan class="txt-ab">AB</tspan>
+  </text>
+
+  <!-- ── Separator ── -->
+  <line x1="176" y1="115" x2="464" y2="115" class="sep-line"/>
+
+  <!-- ── Tagline ── -->
+  <text x="177" y="134"
+        font-family="'Inter','Helvetica Neue','Arial',sans-serif"
+        font-size="12.5" font-weight="400" letter-spacing="3.8"
+        class="txt-tag">
+    MONTE CARLO · A/B TESTING
+  </text>
+
+</svg>
