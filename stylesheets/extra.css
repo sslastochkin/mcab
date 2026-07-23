@@ -136,3 +136,13 @@
 .doc-contents details code {
   font-size: 0.85em;
 }
+
+.doc-contents details pre code {
+  white-space: pre;
+  text-indent: 0;
+  padding-left: 0;
+}
+
+.doc-contents details .highlight {
+  margin-left: 0 !important;
+}
