@@ -3,4 +3,4 @@
 ::: mcab
     options:
       members: true
-      show_submodules: true
+      show_submodules: false
