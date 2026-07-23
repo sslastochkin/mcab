@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'docs/**'
+      - 'src/**'
       - '.github/workflows/docs_deploy.yml'
       - 'mkdocs_requirements.txt'
       - 'mkdocs.yml'
