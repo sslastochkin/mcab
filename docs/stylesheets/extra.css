@@ -2,3 +2,14 @@
 :root {
   --md-primary-fg-color: #3f51b5;
 }
+
+/* Hide "In [N]:" and "Out [N]:" prompt labels */
+.jp-InputPrompt,
+.jp-OutputPrompt {
+    display: none !important;
+}
+
+/* Optionally reduce cell padding too */
+.jp-Cell {
+    padding: 4px 0;
+}
