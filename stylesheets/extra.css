@@ -28,12 +28,12 @@
 
 /* ── Ввод ячейки: ```python — синяя левая полоска ──────── */
 .md-typeset .highlight:has(code[class*="language-"]) {
-  border-left: 3px solid #4a90d9;
+  /* border-left: 3px solid #4a90d9; */
 }
 
 /* ── Вывод ячейки: ``` без языка — серая левая полоска ─── */
 .md-typeset .highlight:has(code:not([class])) {
-  border-left: 3px solid #999;
+  /* border-left: 3px solid #999; */
 }
 
 /* вывод: без подложки, чуть приглушённый текст */
@@ -135,20 +135,4 @@
 
 .doc-contents details code {
   font-size: 0.85em;
-}
-
-/* Убирает blockquote-оформление в секциях докстрингов */
-.doc-section-examples blockquote,
-.md-typeset .doc blockquote {
-  border-left: none;
-  padding-left: 0;
-  margin-left: 0;
-  color: inherit;
-  font-style: normal;
-}
-
-.doc-contents blockquote {
-  border-left: none;
-  padding-left: 0;
-  margin-left: 0;
 }
