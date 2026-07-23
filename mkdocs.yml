@@ -12,7 +12,7 @@ nav:
   - 'Api':
     - 'Overview': 'api/index.md'
     - 'core.py': 'api/core.md'
-    - 'effects.py':'api/effects.md'
+    - 'effects.py': 'api/effects.md'
     - 'mstats.py': 'api/mstats.md'
     - 'plots.py': 'api/plots.md'
     - 'transform.py': 'api/transform.md'
