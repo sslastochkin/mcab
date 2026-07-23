@@ -10,7 +10,8 @@ nav:
     - 'Variance Reduction': 'tutorial/03_variance_reduction.md'
     - 'Multiple Corrections': 'tutorial/04_multiple_corrections.md'
   - 'Api':
-    - Overview: 'api/index.md'
+    - 'Overview': 'api/index.md'
+    - 'core.py': 'api/core.py'
 
 theme:
   name: material
