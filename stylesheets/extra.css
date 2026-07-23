@@ -13,3 +13,37 @@
 .jp-Cell {
     padding: 4px 0;
 }
+
+/* ── Уменьшить общий шрифт ───────────────────────────── */
+.md-content {
+  font-size: 0.875rem; /* 14px вместо 16px */
+}
+
+/* ── Уменьшить шрифт в коде ─────────────────────────── */
+.md-content code,
+.md-content pre code {
+  font-size: 0.78rem;
+}
+
+/* ── Ввод ячейки: ```python — синяя левая полоска ───── */
+.md-content .highlight code[class*="language-"] {
+  border-left: 3px solid #4a90d9;
+  display: block;
+  padding-left: 0.6em;
+}
+
+/* ── Вывод ячейки: ``` без языка — серый фон ─────────── */
+.md-content .highlight code:not([class]) {
+  display: block;
+  padding-left: 0.6em;
+  border-left: 3px solid #aaa;
+  background: rgba(0,0,0,0.04);
+  color: #444;
+}
+
+/* тёмная тема */
+[data-md-color-scheme="slate"] .md-content .highlight code:not([class]) {
+  background: rgba(255,255,255,0.05);
+  border-left-color: #666;
+  color: #bbb;
+}
