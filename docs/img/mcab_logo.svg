@@ -1,0 +1,165 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 155" width="480" height="155">
+  <defs>
+
+    <!-- ── Backgrounds ── -->
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#090b15"/>
+      <stop offset="100%" stop-color="#131628"/>
+    </linearGradient>
+
+    <!-- ── Curve gradients ── -->
+    <linearGradient id="tealStroke" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"   stop-color="#00ebc7"/>
+      <stop offset="100%" stop-color="#00b09b"/>
+    </linearGradient>
+    <linearGradient id="violetStroke" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"   stop-color="#b794f4"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+
+    <!-- ── Text gradients ── -->
+    <linearGradient id="mcText" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"   stop-color="#00ebc7"/>
+      <stop offset="100%" stop-color="#00c4a9"/>
+    </linearGradient>
+    <linearGradient id="abText" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"   stop-color="#c4b5fd"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+
+    <!-- ── Glow filters ── -->
+    <filter id="gTeal" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="gViolet" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="gDot" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="3.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="softGlow">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+  </defs>
+
+  <!-- ════════════════════════════════════
+       BACKGROUND
+  ════════════════════════════════════ -->
+  <rect width="480" height="155" rx="0" fill="url(#bg)"/>
+
+  <!-- very subtle inner vignette -->
+  <radialGradient id="vignette" cx="50%" cy="50%" r="75%">
+    <stop offset="0%"   stop-color="#ffffff" stop-opacity="0.02"/>
+    <stop offset="100%" stop-color="#000000" stop-opacity="0.25"/>
+  </radialGradient>
+  <rect width="480" height="155" fill="url(#vignette)"/>
+
+
+  <!-- ════════════════════════════════════
+       ICON — two bell curves → letter "M"
+       Left bell  : center x≈57,  teal
+       Right bell : center x≈105, violet
+       Baseline   : y=134
+       Peaks      : y=22
+  ════════════════════════════════════ -->
+
+  <!-- Soft ambient glow blobs behind each peak -->
+  <circle cx="57"  cy="52" r="36" fill="#00ebc7" opacity="0.06"/>
+  <circle cx="105" cy="52" r="36" fill="#7c3aed" opacity="0.08"/>
+
+  <!-- Left bell — filled area -->
+  <path d="M 12,134
+            C 26,134  44,24  57,22
+            C 70,20   88,134 102,134 Z"
+        fill="#00ebc7" fill-opacity="0.10"/>
+
+  <!-- Right bell — filled area -->
+  <path d="M 60,134
+            C 74,134  92,24  105,22
+            C 118,20 136,134 150,134 Z"
+        fill="#7c3aed" fill-opacity="0.10"/>
+
+  <!-- Overlap blend (centre valley) -->
+  <path d="M 60,134
+            C 68,134  74,80   81,68
+            C 88,80   94,134 102,134 Z"
+        fill="#5560b0" fill-opacity="0.08"/>
+
+  <!-- Baseline -->
+  <line x1="12" y1="134" x2="150" y2="134"
+        stroke="#1c2040" stroke-width="1.2"/>
+
+  <!-- Left bell — stroke (teal) -->
+  <path d="M 12,134
+            C 26,134  44,24  57,22
+            C 70,20   88,134 102,134"
+        fill="none"
+        stroke="url(#tealStroke)" stroke-width="2.6"
+        stroke-linecap="round" stroke-linejoin="round"
+        filter="url(#gTeal)"/>
+
+  <!-- Right bell — stroke (violet) -->
+  <path d="M 60,134
+            C 74,134  92,24  105,22
+            C 118,20 136,134 150,134"
+        fill="none"
+        stroke="url(#violetStroke)" stroke-width="2.6"
+        stroke-linecap="round" stroke-linejoin="round"
+        filter="url(#gViolet)"/>
+
+  <!-- Peak highlight dots -->
+  <circle cx="57"  cy="22" r="3.8" fill="#00ebc7" filter="url(#gDot)"/>
+  <circle cx="105" cy="22" r="3.8" fill="#c4b5fd" filter="url(#gDot)"/>
+
+
+  <!-- ════════════════════════════════════
+       TEXT — "MCAB"
+  ════════════════════════════════════ -->
+
+  <!-- Main wordmark -->
+  <text
+    x="174" y="105"
+    font-family="'Inter', 'Helvetica Neue', 'Arial', sans-serif"
+    font-size="80"
+    font-weight="900"
+    letter-spacing="-3">
+    <tspan fill="url(#mcText)">MC</tspan><tspan fill="url(#abText)">AB</tspan>
+  </text>
+
+  <!-- ════════════════════════════════════
+       TAGLINE
+  ════════════════════════════════════ -->
+
+  <!-- Thin separator line -->
+  <line x1="176" y1="115" x2="464" y2="115"
+        stroke="#252845" stroke-width="0.8"/>
+
+  <!-- Tagline text -->
+  <text
+    x="177" y="134"
+    font-family="'Inter', 'Helvetica Neue', 'Arial', sans-serif"
+    font-size="12.5"
+    font-weight="400"
+    letter-spacing="3.8"
+    fill="#4a5278">
+    MONTE CARLO · A/B TESTING
+  </text>
+
+</svg>
