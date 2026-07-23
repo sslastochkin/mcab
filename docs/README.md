@@ -6,7 +6,7 @@
 
 ![MCAB Logo](https://raw.githubusercontent.com/sslastochkin/mcab/refs/heads/main/docs/img/logo/mcab_logo_adaptive.svg)
 
-A Python toolkit to design and validate A/B experiments via simulation: estimate power, find MDE, and control type-I error. Supports iid &amp; ratio metrics, linearization, CUPED/CUPAC variance reduction, bootstrap tests, permutation tests, multiple-testing corrections, and AA/AB benchmarking.
+A powerful Python toolkit to design and validate A/B experiments via simulation: estimate power, find MDE, and control type-I error. Supports iid &amp; ratio metrics, linearization, CUPED/CUPAC variance reduction, bootstrap tests, permutation tests, multiple-testing corrections, and AA/AB benchmarking.
 
 ## Quick Start
 
