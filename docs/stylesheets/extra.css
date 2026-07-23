@@ -123,3 +123,25 @@
 [data-md-color-scheme="slate"] .md-typeset table tbody tr:hover td {
   background: #1e2a3a;
 }
+
+/* ── Сброс pandas-стилей для source code (mkdocstrings) ── */
+.md-typeset .highlighttable,
+.md-typeset .highlighttable td,
+.md-typeset .highlighttable th {
+  border: none !important;
+  background: transparent !important;
+  padding: 0 !important;
+  font-weight: inherit !important;
+  white-space: normal !important;
+  font-size: inherit !important;
+  color: inherit !important;
+  border-right: none !important;
+  text-align: left !important;
+  width: auto !important;
+  margin: 0 !important;
+}
+
+.md-typeset .highlighttable tbody tr:nth-child(even) td,
+.md-typeset .highlighttable tbody tr:hover td {
+  background: transparent !important;
+}
