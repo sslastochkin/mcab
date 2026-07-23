@@ -21,7 +21,6 @@ theme:
     - navigation.tracking
     - navigation.footer
     - toc.follow
-    - toc.integrate
     - search.suggest
     - search.highlight
     - content.code.copy
@@ -84,6 +83,7 @@ markdown_extensions:
   - abbr
   - toc:
       permalink: true
+      toc_depth: "1-6"
       
 extra_javascript:
   - javascripts/mathjax.js
