@@ -32,8 +32,10 @@ jobs:
 
       - name: Convert ipynb
         run: |
-          for nb in docs/tutorial/*.ipynb; do
-            jupyter nbconvert --to markdown "$nb" --output-dir docs/tutorial/
+          for dir in tutorial guide; do
+            for nb in docs/$dir/*.ipynb; do
+              jupyter nbconvert --to markdown "$nb" --output-dir "docs/$dir/"
+            done
           done
           sed -i 's/\.ipynb/.md/g' mkdocs.yml
 
