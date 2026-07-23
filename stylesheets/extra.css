@@ -1,10 +1,6 @@
 /* Кастомный цвет ссылок в блоках кода */
 :root {
   --md-primary-fg-color: #3f51b5;
-
-  /* ── Размеры шрифтов ─────────────────────────────────── */
-  --md-typeset-font-size: 0.8rem;   /* общий текст ~12.8px  */
-  --md-code-font-size:    0.7rem;   /* код ~11.2px           */
 }
 
 /* Hide "In [N]:" and "Out [N]:" prompt labels */
@@ -18,28 +14,40 @@
     padding: 4px 0;
 }
 
+/* ── Размеры шрифтов ─────────────────────────────────── */
+/* Material использует .md-typeset, не .md-content        */
+.md-typeset {
+  font-size: 0.75rem !important;
+}
+
+.md-typeset pre,
+.md-typeset pre > code {
+  font-size: 0.7rem !important;
+  line-height: 1.5;
+}
+
 /* ── Ввод ячейки: ```python — синяя левая полоска ──────── */
-.md-content .highlight:has(code[class]) {
+.md-typeset .highlight:has(code[class*="language-"]) {
   border-left: 3px solid #4a90d9;
 }
 
-/* ── Вывод ячейки: ``` без языка — серая полоска ─────────── */
-.md-content .highlight:has(code:not([class])) {
+/* ── Вывод ячейки: ``` без языка — серая левая полоска ─── */
+.md-typeset .highlight:has(code:not([class])) {
   border-left: 3px solid #999;
 }
 
 /* вывод: без подложки, чуть приглушённый текст */
-.md-content pre:has(code:not([class])) {
+.md-typeset pre:has(code:not([class])) {
   background: transparent;
   box-shadow: none;
 }
 
-.md-content pre:has(code:not([class])) code {
+.md-typeset pre:has(code:not([class])) code {
   background: transparent;
   opacity: 0.75;
 }
 
 /* тёмная тема */
-[data-md-color-scheme="slate"] .md-content .highlight:has(code:not([class])) {
+[data-md-color-scheme="slate"] .md-typeset .highlight:has(code:not([class])) {
   border-left-color: #666;
 }
