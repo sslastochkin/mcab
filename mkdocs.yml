@@ -11,7 +11,7 @@ nav:
     - 'Multiple Corrections': 'tutorial/04_multiple_corrections.md'
   - 'Api':
     - 'Overview': 'api/index.md'
-    - 'core.py': 'api/core.py'
+    - 'core.py': 'api/core.md'
 
 theme:
   name: material
