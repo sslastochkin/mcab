@@ -123,6 +123,7 @@ plugins:
       include_source: true
       ignore_h1_titles: true
       execute: false
+      ignore: ["tutorial/*.ipynb", "guide/*.ipynb"]
   - mkdocstrings:
       handlers:
         python:
