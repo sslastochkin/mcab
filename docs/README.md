@@ -46,4 +46,6 @@ pip install mcab
     even starting from a cold process pool
 
 ### Computational benchmark
+Mcab is much faster then traditional for loops approach.  
+The larger the dataset and the higher the number of simulations, the greater the speed advantage of MCAB.  
 ![MCAB Benchmark](https://raw.githubusercontent.com/sslastochkin/mcab/refs/heads/main/benchmark/mcab_benchmark.png)
