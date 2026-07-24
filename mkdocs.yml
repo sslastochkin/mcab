@@ -120,7 +120,7 @@ plugins:
   - minify:
       minify_html: true
   - mkdocs-jupyter:
-      include_source: false
+      include_source: true
       ignore_h1_titles: true
       execute: false
   - mkdocstrings:
