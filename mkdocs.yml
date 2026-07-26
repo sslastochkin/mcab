@@ -5,6 +5,7 @@ site_url: https://sslastochkin.github.io/mcab/
 nav:
   - 'Home': README.md
   - 'Tutorial': 
+    - 'Overview': 'tutorial/00_index.md'
     - 'First steps': 'tutorial/01_first_steps.md'
     - 'Data and Effects': 'tutorial/02_data_and_effects.md'
     - 'Variance Reduction': 'tutorial/03_variance_reduction.md'
