@@ -23,8 +23,8 @@ nav:
       - '9. Comparing Setups and Picking the Best': 'guide/09_compare_setups.md'
       - '10. Multiple Testing': 'guide/10_multiple_testing.md'
       - '11. Empirical Tests': 'guide/11_empirical_tests.md'
-      - '12. End-to-End Recipes': 'guide/12_recipes.md'
-      - '13. Full Example': 'guide/13_full_example.md'
+      # - '12. End-to-End Recipes': 'guide/12_recipes.md'
+      # - '13. Full Example': 'guide/13_full_example.md'
   - 'Api':
     - 'Overview': 'api/index.md'
     - 'core.py': 'api/core.md'
