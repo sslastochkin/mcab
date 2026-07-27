@@ -5,3 +5,7 @@ window.MathJax = {
     processEscapes: true,
   }
 };
+
+document$.subscribe(() => {
+  MathJax.typesetPromise();
+});
